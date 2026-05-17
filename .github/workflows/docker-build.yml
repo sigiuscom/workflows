@@ -8,9 +8,10 @@ on:
         required: false
         default: '.'
       dockerfile:
+        description: Path to Dockerfile (default = {context}/Dockerfile)
         type: string
         required: false
-        default: 'Dockerfile'
+        default: ''
       image:
         description: Full image name without tag (e.g. ghcr.io/sigiuscom/foo)
         type: string
@@ -72,7 +73,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.context }}
-          file: ${{ inputs.dockerfile }}
+          file: ${{ inputs.dockerfile || format('{0}/Dockerfile', inputs.context) }}
           push: ${{ inputs.push }}
           platforms: ${{ inputs.platforms }}
           tags: ${{ steps.meta.outputs.tags }}
