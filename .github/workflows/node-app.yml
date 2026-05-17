@@ -65,6 +65,12 @@ jobs:
         with:
           bun-version: ${{ inputs.bun-version }}
 
+      - name: Setup pnpm
+        if: inputs.package-manager == 'pnpm'
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
       - name: Setup node
         if: inputs.package-manager != 'bun'
         uses: actions/setup-node@v5
@@ -77,7 +83,7 @@ jobs:
           case "${{ inputs.package-manager }}" in
             bun)  bun install --frozen-lockfile ;;
             npm)  npm ci ;;
-            pnpm) corepack enable && pnpm install --frozen-lockfile ;;
+            pnpm) pnpm install --frozen-lockfile ;;
           esac
 
       - name: Lint
