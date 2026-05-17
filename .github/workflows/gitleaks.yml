@@ -14,10 +14,10 @@ on:
         required: false
         default: '8.21.2'
       scan-mode:
-        description: 'detect (full repo) | git (since last push) | dir (no history)'
+        description: 'dir (working tree only, default) | detect (full git history) | git (since last push)'
         type: string
         required: false
-        default: 'detect'
+        default: 'dir'
 
 permissions:
   contents: read
