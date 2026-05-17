@@ -23,6 +23,11 @@ on:
         type: boolean
         required: false
         default: false
+      ignore-helm-templates:
+        description: Add **/templates/** to ignore list (Helm Go-templates are not valid YAML)
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: read
@@ -33,22 +38,37 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: pip install yamllint==1.35.1
+
+      - name: Build config
+        id: cfg
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.config-data }}" ]; then
+            printf '%s\n' "${{ inputs.config-data }}" > /tmp/yamllint.yml
+          elif [ -n "${{ inputs.config-file }}" ]; then
+            cp "${{ inputs.config-file }}" /tmp/yamllint.yml
+          else
+            echo 'extends: default' > /tmp/yamllint.yml
+          fi
+          if [ "${{ inputs.ignore-helm-templates }}" = "true" ]; then
+            cat >> /tmp/yamllint.yml <<'YML'
+          ignore: |
+            **/templates/**
+            **/charts/*/templates/**
+            **/_helpers.tpl
+          YML
+          fi
+          echo '--- yamllint config ---'
+          cat /tmp/yamllint.yml
+
       - name: Lint
         run: |
           set -euo pipefail
-          ARGS=()
-          if [ -n "${{ inputs.config-data }}" ]; then
-            ARGS+=(-d "${{ inputs.config-data }}")
-          elif [ -n "${{ inputs.config-file }}" ]; then
-            ARGS+=(-c "${{ inputs.config-file }}")
-          fi
-          if [ "${{ inputs.strict }}" = "true" ]; then
-            ARGS+=(--strict)
-          fi
-          ARGS+=(-f github)
+          ARGS=(-c /tmp/yamllint.yml -f github)
+          [ "${{ inputs.strict }}" = "true" ] && ARGS+=(--strict)
           yamllint "${ARGS[@]}" ${{ inputs.paths }}
