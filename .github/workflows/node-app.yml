@@ -92,6 +92,7 @@ jobs:
           esac
 
       - name: Lint
+        if: inputs.lint-script != ''
         run: |
           case "${{ inputs.package-manager }}" in
             bun)  bun run ${{ inputs.lint-script }} ;;
