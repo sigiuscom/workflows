@@ -1,0 +1,111 @@
+name: node-app (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        type: string
+        required: false
+        default: '.'
+      package-manager:
+        description: bun | npm | pnpm
+        type: string
+        required: false
+        default: 'bun'
+      bun-version:
+        type: string
+        required: false
+        default: '1.2.18'
+      node-version:
+        type: string
+        required: false
+        default: '22'
+      lint-script:
+        type: string
+        required: false
+        default: 'lint'
+      typecheck-cmd:
+        type: string
+        required: false
+        default: ''
+      test-script:
+        type: string
+        required: false
+        default: 'test'
+      build-script:
+        type: string
+        required: false
+        default: 'build'
+      run-tests:
+        type: boolean
+        required: false
+        default: true
+      run-build:
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-24.04
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+
+      - name: Setup bun
+        if: inputs.package-manager == 'bun'
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2
+        with:
+          bun-version: ${{ inputs.bun-version }}
+
+      - name: Setup node
+        if: inputs.package-manager != 'bun'
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.package-manager }}
+
+      - name: Install
+        run: |
+          case "${{ inputs.package-manager }}" in
+            bun)  bun install --frozen-lockfile ;;
+            npm)  npm ci ;;
+            pnpm) corepack enable && pnpm install --frozen-lockfile ;;
+          esac
+
+      - name: Lint
+        run: |
+          case "${{ inputs.package-manager }}" in
+            bun)  bun run ${{ inputs.lint-script }} ;;
+            npm)  npm run ${{ inputs.lint-script }} --if-present ;;
+            pnpm) pnpm run ${{ inputs.lint-script }} ;;
+          esac
+
+      - name: Typecheck
+        if: inputs.typecheck-cmd != ''
+        run: ${{ inputs.typecheck-cmd }}
+
+      - name: Test
+        if: inputs.run-tests
+        run: |
+          case "${{ inputs.package-manager }}" in
+            bun)  bun run ${{ inputs.test-script }} ;;
+            npm)  npm test --if-present ;;
+            pnpm) pnpm run ${{ inputs.test-script }} ;;
+          esac
+
+      - name: Build
+        if: inputs.run-build
+        run: |
+          case "${{ inputs.package-manager }}" in
+            bun)  bun run ${{ inputs.build-script }} ;;
+            npm)  npm run ${{ inputs.build-script }} --if-present ;;
+            pnpm) pnpm run ${{ inputs.build-script }} ;;
+          esac

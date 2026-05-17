@@ -1,0 +1,64 @@
+name: terraform (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        type: string
+        required: false
+        default: '.'
+      terraform-version:
+        type: string
+        required: false
+        default: '1.13.3'
+      run-plan:
+        description: Run terraform plan (requires backend + credentials)
+        type: boolean
+        required: false
+        default: false
+    secrets:
+      ARM_CLIENT_ID:
+        required: false
+      ARM_CLIENT_SECRET:
+        required: false
+      ARM_SUBSCRIPTION_ID:
+        required: false
+      ARM_TENANT_ID:
+        required: false
+      TF_API_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+      ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v4
+        with:
+          terraform_version: ${{ inputs.terraform-version }}
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: fmt
+        run: terraform fmt -check -recursive
+
+      - name: init
+        run: terraform init -backend=${{ inputs.run-plan }}
+
+      - name: validate
+        run: terraform validate
+
+      - name: plan
+        if: ${{ inputs.run-plan }}
+        run: terraform plan -no-color -input=false

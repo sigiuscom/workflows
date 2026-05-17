@@ -1,0 +1,54 @@
+name: yamllint (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      paths:
+        description: Space-separated paths/globs to lint
+        type: string
+        required: false
+        default: '.'
+      config-data:
+        description: Inline yamllint config (overrides config-file)
+        type: string
+        required: false
+        default: ''
+      config-file:
+        description: Path to .yamllint config (optional)
+        type: string
+        required: false
+        default: ''
+      strict:
+        description: Fail on warnings
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - run: pip install yamllint==1.35.1
+      - name: Lint
+        run: |
+          set -euo pipefail
+          ARGS=()
+          if [ -n "${{ inputs.config-data }}" ]; then
+            ARGS+=(-d "${{ inputs.config-data }}")
+          elif [ -n "${{ inputs.config-file }}" ]; then
+            ARGS+=(-c "${{ inputs.config-file }}")
+          fi
+          if [ "${{ inputs.strict }}" = "true" ]; then
+            ARGS+=(--strict)
+          fi
+          ARGS+=(-f github)
+          yamllint "${ARGS[@]}" ${{ inputs.paths }}

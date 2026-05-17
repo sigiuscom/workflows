@@ -1,0 +1,94 @@
+name: helm-lint (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      charts-dir:
+        description: Root dir to scan for Helm charts (Chart.yaml)
+        type: string
+        required: false
+        default: 'charts'
+      helm-version:
+        type: string
+        required: false
+        default: 'v3.16.2'
+      kubeconform-version:
+        type: string
+        required: false
+        default: 'v0.6.7'
+      kubernetes-version:
+        description: K8s API version for kubeconform validation
+        type: string
+        required: false
+        default: '1.31.0'
+      schema-locations:
+        description: Additional kubeconform schema locations (multi-line)
+        type: string
+        required: false
+        default: |
+          default
+          https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+
+      - name: Setup Helm
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4
+        with:
+          version: ${{ inputs.helm-version }}
+
+      - name: Install kubeconform
+        run: |
+          set -euo pipefail
+          curl -sSL \
+            "https://github.com/yannh/kubeconform/releases/download/${{ inputs.kubeconform-version }}/kubeconform-linux-amd64.tar.gz" \
+            | tar -xzC /usr/local/bin kubeconform
+          kubeconform -v
+
+      - name: helm lint
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+          fail=0
+          for chart in ${{ inputs.charts-dir }}/**/Chart.yaml; do
+            dir=$(dirname "$chart")
+            echo "::group::helm lint $dir"
+            if ! helm lint "$dir"; then
+              fail=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $fail
+
+      - name: helm template + kubeconform
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+          SCHEMA_ARGS=()
+          while IFS= read -r loc; do
+            [ -z "$loc" ] && continue
+            SCHEMA_ARGS+=(-schema-location "$loc")
+          done <<< "${{ inputs.schema-locations }}"
+
+          fail=0
+          for chart in ${{ inputs.charts-dir }}/**/Chart.yaml; do
+            dir=$(dirname "$chart")
+            name=$(basename "$dir")
+            echo "::group::kubeconform $name"
+            if ! helm template "$name" "$dir" 2>/dev/null | \
+              kubeconform -strict -ignore-missing-schemas \
+                -kubernetes-version "${{ inputs.kubernetes-version }}" \
+                "${SCHEMA_ARGS[@]}"; then
+              fail=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $fail

@@ -1,0 +1,77 @@
+name: python-app (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        type: string
+        required: false
+        default: '.'
+      python-version:
+        type: string
+        required: false
+        default: '3.12'
+      install-cmd:
+        description: Override default install command
+        type: string
+        required: false
+        default: ''
+      lint:
+        type: boolean
+        required: false
+        default: true
+      typecheck:
+        type: boolean
+        required: false
+        default: false
+      tests:
+        type: boolean
+        required: false
+        default: true
+      test-cmd:
+        type: string
+        required: false
+        default: 'pytest -v --tb=short'
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-24.04
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: pip
+
+      - name: Install
+        run: |
+          if [ -n "${{ inputs.install-cmd }}" ]; then
+            ${{ inputs.install-cmd }}
+          elif [ -f pyproject.toml ]; then
+            pip install -e ".[dev]" 2>/dev/null || pip install -e .
+          elif [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+            [ -f requirements-dev.txt ] && pip install -r requirements-dev.txt || true
+          fi
+          pip install ruff pytest
+
+      - name: Lint (ruff)
+        if: inputs.lint
+        run: ruff check .
+
+      - name: Typecheck (mypy)
+        if: inputs.typecheck
+        run: pip install mypy && mypy .
+
+      - name: Test
+        if: inputs.tests
+        run: ${{ inputs.test-cmd }}
