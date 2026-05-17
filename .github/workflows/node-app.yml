@@ -16,6 +16,10 @@ on:
         type: string
         required: false
         default: '1.2.18'
+      pnpm-version:
+        type: string
+        required: false
+        default: '9'
       node-version:
         type: string
         required: false
@@ -69,6 +73,7 @@ jobs:
         if: inputs.package-manager == 'pnpm'
         uses: pnpm/action-setup@v4
         with:
+          version: ${{ inputs.pnpm-version }}
           run_install: false
 
       - name: Setup node
