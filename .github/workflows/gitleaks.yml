@@ -8,9 +8,16 @@ on:
         type: string
         required: false
         default: ''
-    secrets:
-      GITLEAKS_LICENSE:
+      gitleaks-version:
+        description: gitleaks binary version
+        type: string
         required: false
+        default: '8.21.2'
+      scan-mode:
+        description: 'detect (full repo) | git (since last push) | dir (no history)'
+        type: string
+        required: false
+        default: 'detect'
 
 permissions:
   contents: read
@@ -24,9 +31,38 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
-          GITLEAKS_ENABLE_COMMENTS: 'true'
-          GITLEAKS_CONFIG: ${{ inputs.config-path }}
+
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          VER="${{ inputs.gitleaks-version }}"
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${VER}/gitleaks_${VER}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Scan
+        run: |
+          set -euo pipefail
+          CFG_ARG=""
+          if [ -n "${{ inputs.config-path }}" ]; then
+            CFG_ARG="--config=${{ inputs.config-path }}"
+          elif [ -f .gitleaks.toml ]; then
+            CFG_ARG="--config=.gitleaks.toml"
+          fi
+          gitleaks ${{ inputs.scan-mode }} \
+            $CFG_ARG \
+            --no-banner \
+            --redact \
+            --verbose \
+            --report-format sarif \
+            --report-path /tmp/gitleaks.sarif \
+            --exit-code 1
+
+      - name: Upload SARIF
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-sarif
+          path: /tmp/gitleaks.sarif
+          if-no-files-found: ignore
+          retention-days: 7
