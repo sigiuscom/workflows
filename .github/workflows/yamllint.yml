@@ -8,13 +8,18 @@ on:
         type: string
         required: false
         default: '.'
+      preset:
+        description: 'gitops (very lenient) | default (yamllint built-in) | strict'
+        type: string
+        required: false
+        default: 'gitops'
       config-data:
-        description: Inline yamllint config (overrides config-file)
+        description: Inline yamllint config (overrides preset)
         type: string
         required: false
         default: ''
       config-file:
-        description: Path to .yamllint config (optional)
+        description: Path to .yamllint config (overrides preset and config-data)
         type: string
         required: false
         default: ''
@@ -24,7 +29,7 @@ on:
         required: false
         default: false
       ignore-helm-templates:
-        description: Add **/templates/** to ignore list (Helm Go-templates are not valid YAML)
+        description: Append **/templates/** to ignore list (Helm Go-templates are not valid YAML)
         type: boolean
         required: false
         default: true
@@ -45,15 +50,44 @@ jobs:
       - run: pip install yamllint==1.35.1
 
       - name: Build config
-        id: cfg
         run: |
           set -euo pipefail
-          if [ -n "${{ inputs.config-data }}" ]; then
-            printf '%s\n' "${{ inputs.config-data }}" > /tmp/yamllint.yml
-          elif [ -n "${{ inputs.config-file }}" ]; then
+          if [ -n "${{ inputs.config-file }}" ]; then
             cp "${{ inputs.config-file }}" /tmp/yamllint.yml
+          elif [ -n "${{ inputs.config-data }}" ]; then
+            cat <<'EOF' > /tmp/yamllint.yml
+          ${{ inputs.config-data }}
+          EOF
           else
-            echo 'extends: default' > /tmp/yamllint.yml
+            case "${{ inputs.preset }}" in
+              strict)
+                echo 'extends: default' > /tmp/yamllint.yml ;;
+              default)
+                echo 'extends: default' > /tmp/yamllint.yml ;;
+              gitops|*)
+                cat > /tmp/yamllint.yml <<'YML'
+          extends: relaxed
+          rules:
+            line-length: disable
+            empty-lines: disable
+            trailing-spaces: { level: warning }
+            new-line-at-end-of-file: { level: warning }
+            comments: disable
+            comments-indentation: disable
+            truthy: disable
+            document-start: disable
+            indentation: { spaces: consistent, indent-sequences: consistent }
+            braces: disable
+            brackets: disable
+            colons: disable
+            commas: disable
+            hyphens: disable
+            key-duplicates: enable
+            octal-values: disable
+            quoted-strings: disable
+          YML
+                ;;
+            esac
           fi
           if [ "${{ inputs.ignore-helm-templates }}" = "true" ]; then
             cat >> /tmp/yamllint.yml <<'YML'
@@ -61,9 +95,11 @@ jobs:
             **/templates/**
             **/charts/*/templates/**
             **/_helpers.tpl
+            **/node_modules/**
+            **/.venv/**
           YML
           fi
-          echo '--- yamllint config ---'
+          echo '--- effective yamllint config ---'
           cat /tmp/yamllint.yml
 
       - name: Lint
