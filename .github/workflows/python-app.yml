@@ -53,9 +53,12 @@ jobs:
           cache: pip
 
       - name: Install
+        env:
+          INSTALL_CMD: ${{ inputs.install-cmd }}
         run: |
-          if [ -n "${{ inputs.install-cmd }}" ]; then
-            ${{ inputs.install-cmd }}
+          set -e
+          if [ -n "$INSTALL_CMD" ]; then
+            eval "$INSTALL_CMD"
           elif [ -f pyproject.toml ]; then
             pip install -e ".[dev]" 2>/dev/null || pip install -e .
           elif [ -f requirements.txt ]; then
