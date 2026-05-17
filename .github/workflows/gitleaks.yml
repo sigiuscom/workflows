@@ -43,14 +43,35 @@ jobs:
       - name: Scan
         run: |
           set -euo pipefail
-          CFG_ARG=""
+          # Build effective config: user override > repo .gitleaks.toml > built-in default
           if [ -n "${{ inputs.config-path }}" ]; then
-            CFG_ARG="--config=${{ inputs.config-path }}"
+            CFG="${{ inputs.config-path }}"
           elif [ -f .gitleaks.toml ]; then
-            CFG_ARG="--config=.gitleaks.toml"
+            CFG=".gitleaks.toml"
+          else
+            cat > /tmp/gitleaks.toml <<'TOML'
+          # sigiuscom default: extend gitleaks defaults + allowlist GitOps noise
+          [extend]
+          useDefault = true
+
+          [allowlist]
+          description = "GitOps and SealedSecret encrypted payloads (not plaintext)"
+          paths = [
+            '''(^|/)sealed[-_]?secrets?/.*\.ya?ml$''',
+            '''.*\.sealed\.ya?ml$''',
+            '''(^|/)argocd/secrets/.*\.ya?ml$''',
+            '''.*sealed-secret\.ya?ml$''',
+          ]
+          regexes = [
+            # Bitnami SealedSecret encrypted blobs always start with Ag[A-D] and are 100+ chars
+            '''Ag[A-D][A-Za-z0-9+/=]{100,}''',
+          ]
+          TOML
+            CFG="/tmp/gitleaks.toml"
           fi
+          echo "Using config: $CFG"
           gitleaks ${{ inputs.scan-mode }} \
-            $CFG_ARG \
+            --config="$CFG" \
             --no-banner \
             --redact \
             --verbose \
