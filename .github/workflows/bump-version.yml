@@ -1,0 +1,101 @@
+name: bump-version (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      version-file:
+        description: Path to file containing X.Y.Z version string
+        type: string
+        required: false
+        default: 'VERSION'
+      strategy:
+        description: 'patch | minor | major'
+        type: string
+        required: false
+        default: 'patch'
+      branch:
+        description: Branch to push commit + tag to (default = current ref)
+        type: string
+        required: false
+        default: ''
+      tag-prefix:
+        type: string
+        required: false
+        default: 'v'
+    outputs:
+      new-version:
+        description: Bumped semver (no prefix)
+        value: ${{ jobs.bump.outputs.new-version }}
+      new-tag:
+        description: Tag pushed (with prefix)
+        value: ${{ jobs.bump.outputs.new-tag }}
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-24.04
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+    outputs:
+      new-version: ${{ steps.bump.outputs.version }}
+      new-tag: ${{ steps.bump.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bump
+        id: bump
+        env:
+          FILE: ${{ inputs.version-file }}
+          STRATEGY: ${{ inputs.strategy }}
+          PREFIX: ${{ inputs.tag-prefix }}
+        run: |
+          set -euo pipefail
+          if [ -f "$FILE" ]; then
+            CUR=$(tr -d '[:space:]' < "$FILE")
+          else
+            CUR="0.0.0"
+          fi
+          IFS=. read -r MA MI PA <<< "$CUR"
+          MA=${MA:-0}; MI=${MI:-0}; PA=${PA:-0}
+          case "$STRATEGY" in
+            patch) PA=$((PA+1)) ;;
+            minor) MI=$((MI+1)); PA=0 ;;
+            major) MA=$((MA+1)); MI=0; PA=0 ;;
+            *) echo "unknown strategy: $STRATEGY" >&2; exit 1 ;;
+          esac
+          NEW="${MA}.${MI}.${PA}"
+          TAG="${PREFIX}${NEW}"
+          echo "version=$NEW" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Bumped $CUR -> $NEW (tag: $TAG)"
+          printf '%s\n' "$NEW" > "$FILE"
+
+      - name: Commit & tag
+        env:
+          NEW_TAG: ${{ steps.bump.outputs.tag }}
+          NEW_VERSION: ${{ steps.bump.outputs.version }}
+          FILE: ${{ inputs.version-file }}
+          BRANCH: ${{ inputs.branch }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$FILE"
+          git commit -m "chore(release): ${NEW_TAG} [skip ci]"
+          git tag -a "$NEW_TAG" -m "Release ${NEW_TAG}"
+          PUSH_REF="${BRANCH:-${GITHUB_REF_NAME}}"
+          # retry push on race with concurrent runs
+          for i in 1 2 3; do
+            git pull --rebase origin "$PUSH_REF" || true
+            if git push origin "HEAD:$PUSH_REF" && git push origin "$NEW_TAG"; then
+              exit 0
+            fi
+            echo "push retry $i..."
+            sleep 5
+          done
+          exit 1
