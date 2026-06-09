@@ -42,6 +42,21 @@ on:
         type: string
         required: false
         default: ''
+      trivy-scan:
+        description: Run Trivy vulnerability scan on the built image (requires push=true)
+        type: boolean
+        required: false
+        default: true
+      trivy-severity:
+        description: Trivy severity filter
+        type: string
+        required: false
+        default: 'HIGH,CRITICAL'
+      trivy-ignore-unfixed:
+        description: Ignore unfixed vulnerabilities
+        type: boolean
+        required: false
+        default: true
     secrets:
       GHCR_TOKEN:
         required: false
@@ -53,6 +68,8 @@ permissions:
 jobs:
   build:
     runs-on: aks-self-hosted
+    outputs:
+      image-tag: ${{ steps.tags.outputs.primary }}
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
       KANIKO_NAMESPACE: ci-builds
@@ -83,6 +100,7 @@ jobs:
           /tmp/kubectl auth can-i create jobs.batch -n "$KANIKO_NAMESPACE"
 
       - name: Build image with Kaniko
+        id: tags
         env:
           INPUT_CONTEXT: ${{ inputs.context }}
           INPUT_DOCKERFILE: ${{ inputs.dockerfile }}
@@ -133,6 +151,9 @@ jobs:
             echo "${INPUT_IMAGE}:${ref_name}" >> "$tags_file"
             echo "${INPUT_IMAGE}:${ref_name}-${short_sha}" >> "$tags_file"
           fi
+
+          primary_tag="$(head -1 "$tags_file")"
+          echo "primary=${primary_tag}" >> "$GITHUB_OUTPUT"
 
           /tmp/kubectl delete job "$job" -n "$KANIKO_NAMESPACE" --ignore-not-found
           /tmp/kubectl delete secret "$docker_secret" "$git_secret" -n "$KANIKO_NAMESPACE" --ignore-not-found
@@ -261,3 +282,28 @@ jobs:
             /tmp/kubectl describe "job/${job}" -n "$KANIKO_NAMESPACE"
             exit "$status"
           fi
+
+  scan:
+    if: ${{ inputs.trivy-scan && inputs.push }}
+    needs: build
+    runs-on: aks-self-hosted
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          sparse-checkout: .trivyignore
+          sparse-checkout-cone-mode: false
+
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          TRIVY_IMAGE_SRC: remote
+        with:
+          image-ref: ${{ needs.build.outputs.image-tag }}
+          scanners: 'vuln'
+          severity: ${{ inputs.trivy-severity }}
+          ignore-unfixed: ${{ inputs.trivy-ignore-unfixed }}
+          exit-code: '1'
+          trivyignores: '.trivyignore'
