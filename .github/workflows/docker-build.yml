@@ -237,10 +237,20 @@ jobs:
           EOF_JOB
 
           /tmp/kubectl apply -f "/tmp/${job}.yaml"
-          set +e
-          /tmp/kubectl wait --for=condition=Complete "job/${job}" -n "$KANIKO_NAMESPACE" --timeout=900s
-          status=$?
-          set -e
+          status=1
+          for _ in $(seq 1 180); do
+            complete="$(/tmp/kubectl get "job/${job}" -n "$KANIKO_NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || true)"
+            failed="$(/tmp/kubectl get "job/${job}" -n "$KANIKO_NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null || true)"
+            if [ "$complete" = "True" ]; then
+              status=0
+              break
+            fi
+            if [ "$failed" = "True" ]; then
+              status=1
+              break
+            fi
+            sleep 5
+          done
           /tmp/kubectl logs "job/${job}" -n "$KANIKO_NAMESPACE" --tail=-1
           /tmp/kubectl delete secret "$docker_secret" "$git_secret" -n "$KANIKO_NAMESPACE" --ignore-not-found
           if [ "$status" -ne 0 ]; then
