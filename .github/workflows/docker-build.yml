@@ -52,49 +52,197 @@ jobs:
     runs-on: aks-self-hosted
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+      KANIKO_NAMESPACE: ci-builds
+      KANIKO_IMAGE: gcr.io/kaniko-project/executor:v1.24.0-debug
     steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.ref }}
+      - name: Validate inputs
+        run: |
+          if [ "${{ inputs.platforms }}" != "linux/amd64" ]; then
+            echo "::error::Kaniko workflow currently supports linux/amd64 only, got '${{ inputs.platforms }}'"
+            exit 1
+          fi
 
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/setup-qemu-action@v3
-        if: contains(inputs.platforms, ',')
+      - name: Install kubectl
+        run: |
+          curl -fsSL -o /tmp/kubectl https://dl.k8s.io/release/v1.36.1/bin/linux/amd64/kubectl
+          chmod +x /tmp/kubectl
+          /tmp/kubectl version --client=true
 
-      - name: Login
-        if: inputs.push
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ inputs.registry }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Configure in-cluster kubectl
+        run: |
+          server="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}"
+          token="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+          ca="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+          /tmp/kubectl config set-cluster in-cluster --server="$server" --certificate-authority="$ca"
+          /tmp/kubectl config set-credentials runner --token="$token"
+          /tmp/kubectl config set-context in-cluster --cluster=in-cluster --user=runner --namespace="$KANIKO_NAMESPACE"
+          /tmp/kubectl config use-context in-cluster
+          /tmp/kubectl auth can-i create jobs.batch -n "$KANIKO_NAMESPACE"
 
-      - name: Metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ inputs.image }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=sha,prefix={{branch}}-,format=short
-            type=raw,value=${{ inputs.version }},enable=${{ inputs.version != '' }}
-            type=raw,value=${{ inputs.version }}-${{ github.sha }},enable=${{ inputs.version != '' }},priority=100
-          flavor: |
-            latest=${{ inputs.version != '' }}
+      - name: Build image with Kaniko
+        env:
+          INPUT_CONTEXT: ${{ inputs.context }}
+          INPUT_DOCKERFILE: ${{ inputs.dockerfile }}
+          INPUT_IMAGE: ${{ inputs.image }}
+          INPUT_PUSH: ${{ inputs.push }}
+          INPUT_REGISTRY: ${{ inputs.registry }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_REF: ${{ inputs.ref }}
+          INPUT_BUILD_ARGS: ${{ inputs.build-args }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
 
-      - name: Build
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ inputs.context }}
-          file: ${{ inputs.dockerfile || format('{0}/Dockerfile', inputs.context) }}
-          push: ${{ inputs.push }}
-          platforms: ${{ inputs.platforms }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: ${{ inputs.build-args }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          job="kaniko-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RANDOM}"
+          docker_secret="${job}-docker"
+          git_secret="${job}-git"
+          ref="${INPUT_REF:-$GITHUB_REF}"
+          context="${INPUT_CONTEXT#./}"
+          if [ -z "$context" ]; then
+            context="."
+          fi
+
+          dockerfile="$INPUT_DOCKERFILE"
+          if [ -z "$dockerfile" ]; then
+            dockerfile="Dockerfile"
+          else
+            dockerfile="${dockerfile#./}"
+            if [ "$context" != "." ]; then
+              prefix="${context%/}/"
+              dockerfile="${dockerfile#$prefix}"
+            fi
+          fi
+
+          ref_name="${GITHUB_REF_NAME//\//-}"
+          short_sha="${GITHUB_SHA:0:7}"
+          tags_file="/tmp/${job}-tags.txt"
+          : > "$tags_file"
+          if [ -n "$INPUT_VERSION" ]; then
+            echo "${INPUT_IMAGE}:${INPUT_VERSION}" >> "$tags_file"
+            major_minor="$(printf '%s' "$INPUT_VERSION" | awk -F. '{print $1"."$2}')"
+            major="$(printf '%s' "$INPUT_VERSION" | awk -F. '{print $1}')"
+            echo "${INPUT_IMAGE}:${major_minor}" >> "$tags_file"
+            echo "${INPUT_IMAGE}:${major}" >> "$tags_file"
+            echo "${INPUT_IMAGE}:latest" >> "$tags_file"
+          else
+            echo "${INPUT_IMAGE}:${ref_name}" >> "$tags_file"
+            echo "${INPUT_IMAGE}:${ref_name}-${short_sha}" >> "$tags_file"
+          fi
+
+          /tmp/kubectl delete job "$job" -n "$KANIKO_NAMESPACE" --ignore-not-found
+          /tmp/kubectl delete secret "$docker_secret" "$git_secret" -n "$KANIKO_NAMESPACE" --ignore-not-found
+          /tmp/kubectl create secret docker-registry "$docker_secret" \
+            --namespace "$KANIKO_NAMESPACE" \
+            --docker-server "$INPUT_REGISTRY" \
+            --docker-username "$GITHUB_ACTOR" \
+            --docker-password "$GH_TOKEN"
+          /tmp/kubectl create secret generic "$git_secret" \
+            --namespace "$KANIKO_NAMESPACE" \
+            --from-literal=GIT_USERNAME="$GITHUB_ACTOR" \
+            --from-literal=GIT_PASSWORD="$GH_TOKEN"
+
+          args_file="/tmp/${job}-args.yaml"
+          : > "$args_file"
+          add_arg() {
+            printf '                - %s\n' "$1" >> "$args_file"
+          }
+
+          github_host="${GITHUB_SERVER_URL#https://}"
+          add_arg "--context=git://${github_host}/${GITHUB_REPOSITORY}.git#${ref}"
+          if [ "$context" != "." ]; then
+            add_arg "--context-sub-path=${context}"
+          fi
+          add_arg "--dockerfile=${dockerfile}"
+          add_arg "--verbosity=info"
+          add_arg "--push-retry=2"
+          if [ "$INPUT_PUSH" != "true" ]; then
+            add_arg "--no-push"
+          fi
+          while IFS= read -r tag; do
+            if [ -n "$tag" ]; then
+              add_arg "--destination=${tag}"
+            fi
+          done < "$tags_file"
+          while IFS= read -r build_arg; do
+            if [ -n "$build_arg" ]; then
+              add_arg "--build-arg=${build_arg}"
+            fi
+          done <<EOF_BUILD_ARGS
+          $INPUT_BUILD_ARGS
+          EOF_BUILD_ARGS
+
+          cat > "/tmp/${job}.yaml" <<EOF_JOB
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: ${job}
+            namespace: ${KANIKO_NAMESPACE}
+          spec:
+            backoffLimit: 0
+            ttlSecondsAfterFinished: 3600
+            template:
+              metadata:
+                labels:
+                  app.kubernetes.io/name: ${job}
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: kaniko
+                    image: ${KANIKO_IMAGE}
+                    args:
+          $(cat "$args_file")
+                    env:
+                      - name: DOCKER_CONFIG
+                        value: /kaniko/.docker
+                      - name: GIT_USERNAME
+                        valueFrom:
+                          secretKeyRef:
+                            name: ${git_secret}
+                            key: GIT_USERNAME
+                      - name: GIT_PASSWORD
+                        valueFrom:
+                          secretKeyRef:
+                            name: ${git_secret}
+                            key: GIT_PASSWORD
+                    volumeMounts:
+                      - name: docker-config
+                        mountPath: /kaniko/.docker
+                    resources:
+                      requests:
+                        cpu: 500m
+                        memory: 1Gi
+                      limits:
+                        cpu: "2"
+                        memory: 4Gi
+                    readinessProbe:
+                      exec:
+                        command: ["/busybox/sh", "-c", "test -d /kaniko"]
+                      initialDelaySeconds: 5
+                      periodSeconds: 30
+                    livenessProbe:
+                      exec:
+                        command: ["/busybox/sh", "-c", "test -d /kaniko"]
+                      initialDelaySeconds: 30
+                      periodSeconds: 60
+                volumes:
+                  - name: docker-config
+                    projected:
+                      sources:
+                        - secret:
+                            name: ${docker_secret}
+                            items:
+                              - key: .dockerconfigjson
+                                path: config.json
+          EOF_JOB
+
+          /tmp/kubectl apply -f "/tmp/${job}.yaml"
+          set +e
+          /tmp/kubectl wait --for=condition=Complete "job/${job}" -n "$KANIKO_NAMESPACE" --timeout=900s
+          status=$?
+          set -e
+          /tmp/kubectl logs "job/${job}" -n "$KANIKO_NAMESPACE" --tail=-1
+          /tmp/kubectl delete secret "$docker_secret" "$git_secret" -n "$KANIKO_NAMESPACE" --ignore-not-found
+          if [ "$status" -ne 0 ]; then
+            /tmp/kubectl describe "job/${job}" -n "$KANIKO_NAMESPACE"
+            exit "$status"
+          fi
