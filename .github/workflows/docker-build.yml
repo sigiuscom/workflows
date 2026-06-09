@@ -42,6 +42,9 @@ on:
         type: string
         required: false
         default: ''
+    secrets:
+      GHCR_TOKEN:
+        required: false
 
 permissions:
   contents: read
@@ -90,6 +93,7 @@ jobs:
           INPUT_REF: ${{ inputs.ref }}
           INPUT_BUILD_ARGS: ${{ inputs.build-args }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -136,7 +140,7 @@ jobs:
             --namespace "$KANIKO_NAMESPACE" \
             --docker-server "$INPUT_REGISTRY" \
             --docker-username "$GITHUB_ACTOR" \
-            --docker-password "$GH_TOKEN"
+            --docker-password "${GHCR_TOKEN:-$GH_TOKEN}"
           /tmp/kubectl create secret generic "$git_secret" \
             --namespace "$KANIKO_NAMESPACE" \
             --from-literal=GIT_USERNAME="$GITHUB_ACTOR" \
