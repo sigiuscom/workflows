@@ -39,7 +39,7 @@ permissions:
 jobs:
   ci:
     if: github.actor != 'renovate[bot]' && github.actor != 'dependabot[bot]'
-    runs-on: ubuntu-24.04
+    runs-on: aks-self-hosted
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
     defaults:
