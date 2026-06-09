@@ -37,8 +37,10 @@ jobs:
         run: |
           set -euo pipefail
           VER="${{ inputs.gitleaks-version }}"
+          mkdir -p "$RUNNER_TEMP/bin"
           curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${VER}/gitleaks_${VER}_linux_x64.tar.gz" \
-            | tar -xz -C /usr/local/bin gitleaks
+            | tar -xz -C "$RUNNER_TEMP/bin" gitleaks
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           gitleaks version
 
       - name: Scan
