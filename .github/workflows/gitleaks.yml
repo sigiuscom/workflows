@@ -40,6 +40,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/bin"
           curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${VER}/gitleaks_${VER}_linux_x64.tar.gz" \
             | tar -xz -C "$RUNNER_TEMP/bin" gitleaks
+          export PATH="$RUNNER_TEMP/bin:$PATH"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           gitleaks version
 

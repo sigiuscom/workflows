@@ -53,6 +53,7 @@ jobs:
           curl -sSL \
             "https://github.com/yannh/kubeconform/releases/download/${{ inputs.kubeconform-version }}/kubeconform-linux-amd64.tar.gz" \
             | tar -xzC "$RUNNER_TEMP/bin" kubeconform
+          export PATH="$RUNNER_TEMP/bin:$PATH"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           kubeconform -v
 
