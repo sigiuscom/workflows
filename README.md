@@ -42,7 +42,7 @@ jobs:
 | `terraform.yml` | `terraform fmt -check`, `init`, `validate`, optional `plan` |
 | `node-app.yml` | bun/npm/pnpm install + lint + typecheck + test + build |
 | `python-app.yml` | pip install + ruff + optional mypy + pytest |
-| `docker-build.yml` | buildx with metadata-action tagging, optional push to GHCR |
+| `docker-build.yml` | Kaniko image builds on AKS runners with optional push, Trivy scan, registry mirrors, and retry controls |
 
 ## Conventions
 

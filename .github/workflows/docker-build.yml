@@ -28,6 +28,26 @@ on:
         type: string
         required: false
         default: ''
+      registry-mirrors:
+        description: Newline-separated Kaniko registry mirrors for Docker Hub pulls
+        type: string
+        required: false
+        default: ''
+      registry-maps:
+        description: Newline-separated Kaniko registry map entries, e.g. index.docker.io=mirror.local:5000
+        type: string
+        required: false
+        default: ''
+      insecure-registries:
+        description: Newline-separated registries Kaniko may use over plain HTTP
+        type: string
+        required: false
+        default: ''
+      image-download-retry:
+        description: Number of retries for Kaniko base image downloads
+        type: string
+        required: false
+        default: '3'
       registry:
         type: string
         required: false
@@ -81,6 +101,17 @@ jobs:
             echo "::error::Kaniko workflow currently supports linux/amd64 only, got '${{ inputs.platforms }}'"
             exit 1
           fi
+          retry="${{ inputs.image-download-retry }}"
+          if [ -z "$retry" ]; then
+            echo "::error::image-download-retry must be a non-negative integer"
+            exit 1
+          fi
+          case "$retry" in
+            *[!0-9]*)
+              echo "::error::image-download-retry must be a non-negative integer, got '${retry}'"
+              exit 1
+              ;;
+          esac
 
       - name: Install kubectl
         run: |
@@ -110,6 +141,10 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_REF: ${{ inputs.ref }}
           INPUT_BUILD_ARGS: ${{ inputs.build-args }}
+          INPUT_REGISTRY_MIRRORS: ${{ inputs.registry-mirrors }}
+          INPUT_REGISTRY_MAPS: ${{ inputs.registry-maps }}
+          INPUT_INSECURE_REGISTRIES: ${{ inputs.insecure-registries }}
+          INPUT_IMAGE_DOWNLOAD_RETRY: ${{ inputs.image-download-retry }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         run: |
@@ -181,9 +216,33 @@ jobs:
           add_arg "--dockerfile=${dockerfile}"
           add_arg "--verbosity=info"
           add_arg "--push-retry=2"
+          if [ "$INPUT_IMAGE_DOWNLOAD_RETRY" != "0" ]; then
+            add_arg "--image-download-retry=${INPUT_IMAGE_DOWNLOAD_RETRY}"
+          fi
           if [ "$INPUT_PUSH" != "true" ]; then
             add_arg "--no-push"
           fi
+          while IFS= read -r registry_mirror; do
+            if [ -n "$registry_mirror" ]; then
+              add_arg "--registry-mirror=${registry_mirror}"
+            fi
+          done <<EOF_REGISTRY_MIRRORS
+          $INPUT_REGISTRY_MIRRORS
+          EOF_REGISTRY_MIRRORS
+          while IFS= read -r registry_map; do
+            if [ -n "$registry_map" ]; then
+              add_arg "--registry-map=${registry_map}"
+            fi
+          done <<EOF_REGISTRY_MAPS
+          $INPUT_REGISTRY_MAPS
+          EOF_REGISTRY_MAPS
+          while IFS= read -r insecure_registry; do
+            if [ -n "$insecure_registry" ]; then
+              add_arg "--insecure-registry=${insecure_registry}"
+            fi
+          done <<EOF_INSECURE_REGISTRIES
+          $INPUT_INSECURE_REGISTRIES
+          EOF_INSECURE_REGISTRIES
           while IFS= read -r tag; do
             if [ -n "$tag" ]; then
               add_arg "--destination=${tag}"
