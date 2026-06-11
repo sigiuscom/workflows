@@ -1,0 +1,183 @@
+name: nuclei (reusable)
+
+# DAST scan of live HTTP targets with projectdiscovery/nuclei.
+# Unlike gitleaks/opengrep (which scan source), nuclei scans running
+# endpoints, so callers must pass a target/targets and typically invoke
+# this on a schedule or via workflow_dispatch, not on every push.
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        description: Single target URL/host to scan (-u)
+        type: string
+        required: false
+        default: ''
+      targets:
+        description: Newline-separated list of target URLs/hosts (-list)
+        type: string
+        required: false
+        default: ''
+      templates:
+        description: Newline-separated template files/dirs/IDs (-t). Empty = all default templates.
+        type: string
+        required: false
+        default: ''
+      tags:
+        description: Newline-separated template tags to include (-tags)
+        type: string
+        required: false
+        default: ''
+      severity:
+        description: |
+          Comma-separated severities to report (-severity),
+          e.g. 'critical,high,medium'. Empty = all.
+        type: string
+        required: false
+        default: 'critical,high,medium'
+      rate-limit:
+        description: Max requests per second (-rate-limit)
+        type: string
+        required: false
+        default: '150'
+      timeout:
+        description: Per-request timeout in seconds (-timeout)
+        type: string
+        required: false
+        default: '10'
+      extra-flags:
+        description: Extra raw nuclei CLI flags
+        type: string
+        required: false
+        default: ''
+      fail-on-findings:
+        description: Fail the job (exit 1) when nuclei reports any finding
+        type: boolean
+        required: false
+        default: true
+      nuclei-version:
+        description: nuclei release version (without leading v)
+        type: string
+        required: false
+        default: '3.9.0'
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: aks-self-hosted
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate inputs
+        env:
+          INPUT_TARGET: ${{ inputs.target }}
+          INPUT_TARGETS: ${{ inputs.targets }}
+        run: |
+          set -euo pipefail
+          if [ -z "$INPUT_TARGET" ] && [ -z "$(printf '%s' "$INPUT_TARGETS" | tr -d '[:space:]')" ]; then
+            echo "::error::nuclei requires 'target' or 'targets' to be set"
+            exit 1
+          fi
+
+      - name: Install nuclei
+        env:
+          VER: ${{ inputs.nuclei-version }}
+        run: |
+          set -euo pipefail
+          arch="$(uname -m)"
+          case "$arch" in
+            x86_64 | amd64) goarch='amd64' ;;
+            aarch64 | arm64) goarch='arm64' ;;
+            *) echo "::error::Unsupported architecture '$arch'"; exit 1 ;;
+          esac
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSL \
+            "https://github.com/projectdiscovery/nuclei/releases/download/v${VER}/nuclei_${VER}_linux_${goarch}.zip" \
+            -o "$RUNNER_TEMP/nuclei.zip"
+          unzip -o "$RUNNER_TEMP/nuclei.zip" nuclei -d "$RUNNER_TEMP/bin"
+          chmod +x "$RUNNER_TEMP/bin/nuclei"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/nuclei" -version
+
+      - name: Scan
+        env:
+          INPUT_TARGET: ${{ inputs.target }}
+          INPUT_TARGETS: ${{ inputs.targets }}
+          INPUT_TEMPLATES: ${{ inputs.templates }}
+          INPUT_TAGS: ${{ inputs.tags }}
+          INPUT_SEVERITY: ${{ inputs.severity }}
+          INPUT_RATE_LIMIT: ${{ inputs.rate-limit }}
+          INPUT_TIMEOUT: ${{ inputs.timeout }}
+          INPUT_EXTRA_FLAGS: ${{ inputs.extra-flags }}
+        run: |
+          set -euo pipefail
+          args=(
+            -disable-update-check
+            -no-interactsh
+            -no-color
+            -stats
+            -jsonl-export /tmp/nuclei.jsonl
+            -sarif-export /tmp/nuclei.sarif
+            -rate-limit "$INPUT_RATE_LIMIT"
+            -timeout "$INPUT_TIMEOUT"
+          )
+
+          if [ -n "$INPUT_TARGET" ]; then
+            args+=(-u "$INPUT_TARGET")
+          fi
+
+          if [ -n "$(printf '%s' "$INPUT_TARGETS" | tr -d '[:space:]')" ]; then
+            printf '%s\n' "$INPUT_TARGETS" | sed '/^[[:space:]]*$/d' > /tmp/nuclei-targets.txt
+            args+=(-list /tmp/nuclei-targets.txt)
+          fi
+
+          while IFS= read -r tpl; do
+            [ -n "$tpl" ] && args+=(-t "$tpl")
+          done <<EOF
+          $INPUT_TEMPLATES
+          EOF
+
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && args+=(-tags "$tag")
+          done <<EOF
+          $INPUT_TAGS
+          EOF
+
+          if [ -n "$INPUT_SEVERITY" ]; then
+            args+=(-severity "$INPUT_SEVERITY")
+          fi
+
+          # shellcheck disable=SC2206
+          extra=($INPUT_EXTRA_FLAGS)
+          nuclei "${args[@]}" "${extra[@]}"
+
+      - name: Evaluate findings
+        if: always()
+        env:
+          FAIL_ON_FINDINGS: ${{ inputs.fail-on-findings }}
+        run: |
+          set -euo pipefail
+          count=0
+          if [ -s /tmp/nuclei.jsonl ]; then
+            count="$(grep -c '' /tmp/nuclei.jsonl || true)"
+          fi
+          echo "nuclei findings: $count"
+          if [ "$FAIL_ON_FINDINGS" = "true" ] && [ "$count" -gt 0 ]; then
+            echo "::error::nuclei reported $count finding(s)"
+            exit 1
+          fi
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuclei-reports
+          path: |
+            /tmp/nuclei.sarif
+            /tmp/nuclei.jsonl
+          if-no-files-found: ignore
+          retention-days: 7

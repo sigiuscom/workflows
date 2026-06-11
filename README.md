@@ -21,6 +21,14 @@ jobs:
   gitleaks:
     uses: sigiuscom/workflows/.github/workflows/gitleaks.yml@main
 
+  opengrep:
+    uses: sigiuscom/workflows/.github/workflows/opengrep.yml@main
+    with:
+      config: |
+        p/python
+        p/typescript
+        p/owasp-top-ten
+
   yamllint:
     uses: sigiuscom/workflows/.github/workflows/yamllint.yml@main
     with:
@@ -32,11 +40,31 @@ jobs:
       charts-dir: 'charts'
 ```
 
+`nuclei` scans **live** HTTP endpoints (DAST), so it is not wired into the
+default push CI. Invoke it deliberately, e.g. on a schedule or manually:
+
+```yaml
+name: DAST
+on:
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+jobs:
+  nuclei:
+    uses: sigiuscom/workflows/.github/workflows/nuclei.yml@main
+    with:
+      target: 'https://staging.example.com'
+      severity: 'critical,high'
+```
+
 ## Catalog
 
 | Workflow | Purpose |
 |---|---|
 | `gitleaks.yml` | Secret scanning across full git history |
+| `opengrep.yml` | SAST code scanning (Opengrep, Semgrep-rule compatible) with SARIF output |
+| `nuclei.yml` | DAST scanning of live HTTP targets (Nuclei) with SARIF/JSONL output |
 | `yamllint.yml` | YAML lint with GitHub annotations |
 | `helm-lint.yml` | `helm lint` + `helm template` + `kubeconform` for every chart |
 | `terraform.yml` | `terraform fmt -check`, `init`, `validate`, optional `plan` |

@@ -1,0 +1,117 @@
+name: opengrep (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      paths:
+        description: Space-separated paths to scan
+        type: string
+        required: false
+        default: '.'
+      config:
+        description: |
+          Newline-separated opengrep configs. Each becomes a --config arg.
+          Use registry packs (e.g. p/python, p/owasp-top-ten), local rule
+          files/dirs, or 'auto' to let opengrep pick rules for the codebase.
+        type: string
+        required: false
+        default: 'auto'
+      exclude:
+        description: Newline-separated path globs to exclude (--exclude)
+        type: string
+        required: false
+        default: ''
+      severity:
+        description: |
+          Newline-separated severities to report (--severity).
+          One of INFO, WARNING, ERROR. Empty = all severities.
+        type: string
+        required: false
+        default: ''
+      error-on-findings:
+        description: Fail the job (exit 1) when opengrep reports findings
+        type: boolean
+        required: false
+        default: true
+      opengrep-version:
+        description: opengrep release version (without leading v)
+        type: string
+        required: false
+        default: '1.22.0'
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    if: github.actor != 'renovate[bot]' && github.actor != 'dependabot[bot]'
+    runs-on: aks-self-hosted
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install opengrep
+        env:
+          VER: ${{ inputs.opengrep-version }}
+        run: |
+          set -euo pipefail
+          arch="$(uname -m)"
+          case "$arch" in
+            x86_64 | amd64) dist='opengrep_manylinux_x86' ;;
+            aarch64 | arm64) dist='opengrep_manylinux_aarch64' ;;
+            *) echo "::error::Unsupported architecture '$arch'"; exit 1 ;;
+          esac
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSL \
+            "https://github.com/opengrep/opengrep/releases/download/v${VER}/${dist}" \
+            -o "$RUNNER_TEMP/bin/opengrep"
+          chmod +x "$RUNNER_TEMP/bin/opengrep"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/opengrep" --version
+
+      - name: Scan
+        env:
+          INPUT_PATHS: ${{ inputs.paths }}
+          INPUT_CONFIG: ${{ inputs.config }}
+          INPUT_EXCLUDE: ${{ inputs.exclude }}
+          INPUT_SEVERITY: ${{ inputs.severity }}
+          INPUT_ERROR_ON_FINDINGS: ${{ inputs.error-on-findings }}
+        run: |
+          set -euo pipefail
+          args=(scan --sarif-output=/tmp/opengrep.sarif)
+
+          while IFS= read -r cfg; do
+            [ -n "$cfg" ] && args+=(--config "$cfg")
+          done <<EOF
+          $INPUT_CONFIG
+          EOF
+
+          while IFS= read -r ex; do
+            [ -n "$ex" ] && args+=(--exclude "$ex")
+          done <<EOF
+          $INPUT_EXCLUDE
+          EOF
+
+          while IFS= read -r sev; do
+            [ -n "$sev" ] && args+=(--severity "$sev")
+          done <<EOF
+          $INPUT_SEVERITY
+          EOF
+
+          if [ "$INPUT_ERROR_ON_FINDINGS" = "true" ]; then
+            args+=(--error)
+          fi
+
+          # shellcheck disable=SC2206
+          paths=($INPUT_PATHS)
+          opengrep "${args[@]}" "${paths[@]}"
+
+      - name: Upload SARIF
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opengrep-sarif
+          path: /tmp/opengrep.sarif
+          if-no-files-found: ignore
+          retention-days: 7
