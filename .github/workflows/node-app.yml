@@ -72,7 +72,7 @@ jobs:
 
       - name: Setup pnpm
         if: inputs.package-manager == 'pnpm'
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: ${{ inputs.pnpm-version }}
           run_install: false
