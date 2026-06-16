@@ -42,7 +42,7 @@ jobs:
       new-version: ${{ steps.bump.outputs.version }}
       new-tag: ${{ steps.bump.outputs.tag }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
