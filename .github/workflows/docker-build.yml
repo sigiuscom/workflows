@@ -347,7 +347,7 @@ jobs:
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           TRIVY_USERNAME: ${{ github.actor }}
-          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          TRIVY_PASSWORD: ${{ secrets.GHCR_TOKEN || github.token }}
           TRIVY_IMAGE_SRC: remote
         with:
           image-ref: ${{ needs.build.outputs.image-tag }}
