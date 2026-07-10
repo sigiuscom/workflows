@@ -26,8 +26,10 @@ on:
         type: string
         required: false
         default: |
+          https://cdn.jsdelivr.net/gh/yannh/kubernetes-json-schema@master/v{{.NormalizedKubernetesVersion}}-standalone-strict/{{.ResourceKind}}{{.KindSuffix}}.json
           default
           https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+          https://cdn.jsdelivr.net/gh/datreeio/CRDs-catalog@main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
 
 permissions:
   contents: read
