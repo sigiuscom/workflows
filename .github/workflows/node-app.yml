@@ -79,7 +79,7 @@ jobs:
 
       - name: Setup node
         if: inputs.package-manager != 'bun'
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
           cache: ${{ inputs.package-manager }}
