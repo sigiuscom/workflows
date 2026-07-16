@@ -1,0 +1,43 @@
+name: kustomize (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      paths:
+        type: string
+        required: false
+        default: '.'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: aks-self-hosted
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install kustomize
+        run: |
+          set -euo pipefail
+          version='5.7.1'
+          curl -fsSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${version}/kustomize_v${version}_linux_amd64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Build overlays
+        env:
+          PATHS: ${{ inputs.paths }}
+        run: |
+          set -euo pipefail
+          found=0
+          for root in $PATHS; do
+            while IFS= read -r file; do
+              found=1
+              path=$(dirname "$file")
+              echo "::group::kustomize build $path"
+              kustomize build "$path" >/dev/null
+              echo "::endgroup::"
+            done < <(find "$root" -type f \( -name kustomization.yaml -o -name kustomization.yml \) -print)
+          done
+          [ "$found" -eq 1 ] || echo 'No Kustomize roots found'

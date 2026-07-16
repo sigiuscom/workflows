@@ -17,6 +17,7 @@ on:
         type: string
         required: true
       push:
+        description: Push images when true; false runs a build-only validation
         type: boolean
         required: false
         default: false

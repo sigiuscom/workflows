@@ -1,0 +1,8 @@
+self-hosted-runner:
+  labels:
+    - aks-self-hosted
+paths:
+  .github/workflows/**/*.{yml,yaml}:
+    ignore:
+      - 'shellcheck reported issue in this script: SC2129:.+'
+      - 'shellcheck reported issue in this script: SC2295:.+'
