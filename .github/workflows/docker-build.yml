@@ -265,7 +265,7 @@ jobs:
             namespace: ${KANIKO_NAMESPACE}
           spec:
             backoffLimit: 0
-            ttlSecondsAfterFinished: 3600
+            ttlSecondsAfterFinished: 600
             template:
               metadata:
                 labels:
@@ -295,11 +295,11 @@ jobs:
                         mountPath: /kaniko/.docker
                     resources:
                       requests:
-                        cpu: 500m
-                        memory: 1Gi
+                        cpu: 250m
+                        memory: 512Mi
                       limits:
                         cpu: "2"
-                        memory: 4Gi
+                        memory: 3Gi
                 volumes:
                   - name: docker-config
                     projected:
