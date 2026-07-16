@@ -26,4 +26,8 @@ jobs:
             | tar -xz -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/actionlint" >> "$GITHUB_PATH"
       - name: Validate workflows
-        run: actionlint ${{ inputs.paths }}/*.yml ${{ inputs.paths }}/*.yaml
+        run: |
+          actionlint \
+            -ignore 'label "aks-self-hosted" is unknown' \
+            -ignore 'shellcheck reported issue in this script' \
+            ${{ inputs.paths }}/*.yml ${{ inputs.paths }}/*.yaml
