@@ -244,6 +244,14 @@ jobs:
           done <<EOF_INSECURE_REGISTRIES
           $INPUT_INSECURE_REGISTRIES
           EOF_INSECURE_REGISTRIES
+          # Shared platform pull-through cache (infra-zot): route Docker Hub through it so builds
+          # never hit the anonymous Docker Hub rate limit (Spegel is a peer mirror and never holds
+          # Kaniko FROM bases). Baked in unconditionally -- in addition to any caller mirrors --
+          # because ci-builds always runs in-cluster where zot.zot.svc is reachable. See azinfra
+          # docs/zot-pull-through-cache.md.
+          zot_cache="zot.zot.svc.cluster.local:5000"
+          add_arg "--registry-map=index.docker.io=${zot_cache}"
+          add_arg "--insecure-registry=${zot_cache}"
           while IFS= read -r tag; do
             if [ -n "$tag" ]; then
               add_arg "--destination=${tag}"
