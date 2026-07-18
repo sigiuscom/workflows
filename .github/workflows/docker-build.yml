@@ -251,7 +251,10 @@ jobs:
           # docs/zot-pull-through-cache.md.
           zot_cache="zot.zot.svc.cluster.local:5000"
           add_arg "--registry-map=index.docker.io=${zot_cache}"
-          add_arg "--insecure-registry=${zot_cache}"
+          # zot serves TLS (cert-manager self-signed); pull over HTTPS but skip cert verification --
+          # source authentication is the CiliumNetworkPolicy, encryption is TLS. See azinfra
+          # docs/zot-pull-through-cache.md "Security".
+          add_arg "--skip-tls-verify-registry=${zot_cache}"
           while IFS= read -r tag; do
             if [ -n "$tag" ]; then
               add_arg "--destination=${tag}"
