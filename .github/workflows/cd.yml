@@ -46,6 +46,23 @@ on:
         type: string
         default: |
           spegel-registry.spegel.svc.cluster.local:5000
+      registry-maps:
+        description: 'Newline-separated Kaniko registry map entries, e.g. index.docker.io=zot.zot.svc.cluster.local:5000'
+        required: false
+        type: string
+        default: ''
+      trivy-scan:
+        required: false
+        type: boolean
+        default: true
+      trivy-severity:
+        required: false
+        type: string
+        default: 'HIGH,CRITICAL'
+      trivy-ignore-unfixed:
+        required: false
+        type: boolean
+        default: true
     secrets:
       GHCR_TOKEN:
         required: false
@@ -121,6 +138,10 @@ jobs:
       platforms: ${{ matrix.img.platforms || 'linux/amd64' }}
       registry-mirrors: ${{ inputs.registry-mirrors }}
       insecure-registries: ${{ inputs.insecure-registries }}
+      registry-maps: ${{ inputs.registry-maps }}
+      trivy-scan: ${{ inputs.trivy-scan }}
+      trivy-severity: ${{ inputs.trivy-severity }}
+      trivy-ignore-unfixed: ${{ inputs.trivy-ignore-unfixed }}
       image-download-retry: '3'
       build-args: ${{ matrix.img.build-args || '' }}
     secrets:
