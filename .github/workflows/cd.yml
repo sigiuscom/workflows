@@ -1,0 +1,177 @@
+name: cd (reusable)
+
+# Reusable continuous-deployment for single/multi-image sigiuscom services on
+# AKS+ArgoCD. Caller passes its image list; on push to main this bumps the
+# version from conventional commits, builds every image at that semver via
+# Kaniko, tags a GitHub Release, and ArgoCD Image Updater deploys.
+#
+# This is the "lite" pipeline (no rc/smoke/promote gate). callhero keeps its
+# own cd.yml because it has 12 images plus a container-smoke pre-deploy gate.
+#
+# Caller wrapper example (.github/workflows/cd.yml):
+#   on:
+#     push: {branches: [main], paths-ignore: ['charts/**','VERSION','**/*.md']}
+#     workflow_dispatch: {inputs: {level: {type: string, default: auto}}}
+#   jobs:
+#     cd:
+#       uses: sigiuscom/workflows/.github/workflows/cd.yml@main
+#       with:
+#         images: |
+#           [{"image":"ghcr.io/sigiuscom/reflexia-backend","context":"Backend","dockerfile":"Backend/Dockerfile"}]
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      images:
+        description: 'JSON array of {image, context?, dockerfile?, build-args?, platforms?}'
+        required: true
+        type: string
+      version-file:
+        required: false
+        type: string
+        default: 'VERSION'
+      level:
+        description: 'Bump level override (auto|patch|minor|major)'
+        required: false
+        type: string
+        default: 'auto'
+      registry-mirrors:
+        required: false
+        type: string
+        default: |
+          spegel-registry.spegel.svc.cluster.local:5000
+      insecure-registries:
+        required: false
+        type: string
+        default: |
+          spegel-registry.spegel.svc.cluster.local:5000
+    secrets:
+      GHCR_TOKEN:
+        required: false
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  strategy:
+    if: >-
+      !contains(github.event.head_commit.message, '[skip ci]')
+      && !contains(github.event.head_commit.message, 'automatic update')
+    runs-on: aks-self-hosted
+    outputs:
+      level: ${{ steps.pick.outputs.level }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+      - id: pick
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_LEVEL: ${{ inputs.level }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "${INPUT_LEVEL:-auto}" != "auto" ]; then
+            level="$INPUT_LEVEL"
+          else
+            last="$(git describe --tags --match 'v*' --abbrev=0 2>/dev/null || true)"
+            range="HEAD"
+            [ -n "$last" ] && range="${last}..HEAD"
+            msgs="$(git log --format='%s%n%b' "$range")"
+            if printf '%s\n' "$msgs" | grep -qE '^[a-z]+(\([^)]+\))?!:' \
+              || printf '%s\n' "$msgs" | grep -qE 'BREAKING[ -]CHANGE'; then
+              level="major"
+            elif printf '%s\n' "$msgs" | grep -qE '^feat(\([^)]+\))?:'; then
+              level="minor"
+            else
+              level="patch"
+            fi
+          fi
+          echo "level=$level" >> "$GITHUB_OUTPUT"
+          echo "Bump level: $level"
+
+  bump:
+    needs: strategy
+    uses: sigiuscom/workflows/.github/workflows/bump-version.yml@b606fc16d412cba3d29c06b8c52ed55d72205a44  # main
+    with:
+      version-file: ${{ inputs.version-file }}
+      strategy: ${{ needs.strategy.outputs.level }}
+      branch: main
+    secrets: inherit
+
+  build:
+    needs: bump
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        img: ${{ fromJSON(inputs.images) }}
+    uses: sigiuscom/workflows/.github/workflows/docker-build.yml@b606fc16d412cba3d29c06b8c52ed55d72205a44  # main
+    with:
+      image: ${{ matrix.img.image }}
+      context: ${{ matrix.img.context || '.' }}
+      dockerfile: ${{ matrix.img.dockerfile || '' }}
+      push: true
+      version: ${{ needs.bump.outputs.new-version }}
+      ref: ${{ needs.bump.outputs.new-tag }}
+      platforms: ${{ matrix.img.platforms || 'linux/amd64' }}
+      registry-mirrors: ${{ inputs.registry-mirrors }}
+      insecure-registries: ${{ inputs.insecure-registries }}
+      image-download-retry: '3'
+      build-args: ${{ matrix.img.build-args || '' }}
+    secrets:
+      GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+
+  github-release:
+    needs: [bump, build]
+    runs-on: aks-self-hosted
+    permissions:
+      contents: write
+    steps:
+      - name: Create GitHub Release with generated notes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.bump.outputs.new-tag }}
+          SEMVER: ${{ needs.bump.outputs.new-version }}
+          REPO: ${{ github.repository }}
+          API_URL: ${{ github.api_url }}
+        run: |
+          set -euo pipefail
+          release_url="$API_URL/repos/$REPO/releases/tags/$TAG"
+          status=$(curl -sS -o /tmp/release.json -w '%{http_code}' \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$release_url")
+          if [ "$status" = "200" ]; then
+            echo "Release $TAG already exists"; exit 0
+          fi
+          if [ "$status" != "404" ]; then
+            cat /tmp/release.json; echo "Unexpected status $status" >&2; exit 1
+          fi
+          cat >/tmp/release-payload.json <<EOF
+          {
+            "tag_name": "$TAG",
+            "name": "$TAG",
+            "body": "Container images published with semver tag $SEMVER (auto-released on merge to main).",
+            "draft": false,
+            "prerelease": false,
+            "generate_release_notes": true,
+            "make_latest": "true"
+          }
+          EOF
+          create_status=$(curl -sS -o /tmp/release-create.json -w '%{http_code}' \
+            -X POST \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$API_URL/repos/$REPO/releases" \
+            --data @/tmp/release-payload.json)
+          if [ "$create_status" != "201" ]; then
+            cat /tmp/release-create.json; echo "Failed to create release $TAG: $create_status" >&2; exit 1
+          fi
+          echo "Created release $TAG"
