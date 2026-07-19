@@ -25,6 +25,14 @@ jobs:
           curl -fsSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${version}/kustomize_v${version}_linux_amd64.tar.gz" \
             | tar -xz -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Install Helm
+        run: |
+          set -euo pipefail
+          version='3.19.0'
+          curl -fsSL "https://get.helm.sh/helm-v${version}-linux-amd64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP"
+          install "$RUNNER_TEMP/linux-amd64/helm" "$RUNNER_TEMP/helm"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - name: Build overlays
         env:
           PATHS: ${{ inputs.paths }}
