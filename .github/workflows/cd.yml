@@ -83,7 +83,7 @@ jobs:
     outputs:
       level: ${{ steps.pick.outputs.level }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
       - id: pick
@@ -113,7 +113,7 @@ jobs:
 
   bump:
     needs: strategy
-    uses: sigiuscom/workflows/.github/workflows/bump-version.yml@b606fc16d412cba3d29c06b8c52ed55d72205a44  # main
+    uses: sigiuscom/workflows/.github/workflows/bump-version.yml@b659600f83395155869ce3b3433b51675986c598  # main
     with:
       version-file: ${{ inputs.version-file }}
       strategy: ${{ needs.strategy.outputs.level }}
@@ -127,7 +127,7 @@ jobs:
       max-parallel: 5
       matrix:
         img: ${{ fromJSON(inputs.images) }}
-    uses: sigiuscom/workflows/.github/workflows/docker-build.yml@b606fc16d412cba3d29c06b8c52ed55d72205a44  # main
+    uses: sigiuscom/workflows/.github/workflows/docker-build.yml@b659600f83395155869ce3b3433b51675986c598  # main
     with:
       image: ${{ matrix.img.image }}
       context: ${{ matrix.img.context || '.' }}
