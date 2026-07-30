@@ -322,7 +322,48 @@ jobs:
                                 path: config.json
           EOF_JOB
 
-          /tmp/kubectl apply -f "/tmp/${job}.yaml"
+          # The Kaniko Job is created through the cluster's admission chain, which includes the
+          # AKS-managed safeguards mutating webhook (failurePolicy: Fail). When that webhook is
+          # briefly unreachable every Job CREATE in the cluster fails with a 500, and a build
+          # that was fine dies for a reason that has nothing to do with it -- observed
+          # 2026-07-30, when it also took the GitHub Release step with it.
+          #
+          # Retry ONLY that call, and only for faults that look transient. A bad manifest, a
+          # missing RBAC grant or a rejected admission policy must still fail on the first
+          # attempt: retrying those hides a real error behind a slower red build. `apply` is
+          # idempotent, so a retry after a partially-applied attempt is safe.
+          apply_job() {
+            attempt=1
+            max_attempts=5
+            delay=2
+            while :; do
+              out="$(/tmp/kubectl apply -f "/tmp/${job}.yaml" 2>&1)" && rc=0 || rc=$?
+              printf '%s\n' "$out"
+              if [ "$rc" -eq 0 ]; then
+                return 0
+              fi
+              if [ "$attempt" -ge "$max_attempts" ]; then
+                echo "kaniko: job apply still failing after ${attempt} attempts" >&2
+                return "$rc"
+              fi
+              case "$out" in
+                *"failed calling webhook"*|*InternalError*|*ServiceUnavailable*|\
+                *"connection refused"*|*"TLS handshake timeout"*|*"i/o timeout"*|\
+                *"etcdserver: request timed out"*|\
+                *"the server is currently unable to handle the request"*)
+                  echo "kaniko: transient API-server fault, retry ${attempt}/${max_attempts} in ${delay}s" >&2
+                  sleep "$delay"
+                  delay=$((delay * 2))
+                  attempt=$((attempt + 1))
+                  ;;
+                *)
+                  echo "kaniko: apply failed with a non-transient error; not retrying" >&2
+                  return "$rc"
+                  ;;
+              esac
+            done
+          }
+          apply_job
           status=1
           for _ in $(seq 1 180); do
             complete="$(/tmp/kubectl get "job/${job}" -n "$KANIKO_NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || true)"
