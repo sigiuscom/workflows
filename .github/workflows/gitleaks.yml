@@ -58,12 +58,19 @@ jobs:
           useDefault = true
 
           [allowlist]
-          description = "GitOps and SealedSecret encrypted payloads (not plaintext)"
+          description = "GitOps secret *references*, not values: SealedSecret ciphertext and ESO manifests"
           paths = [
             '''(^|/)sealed[-_]?secrets?/.*\.ya?ml$''',
             '''.*\.sealed\.ya?ml$''',
             '''(^|/)argocd/secrets/.*\.ya?ml$''',
             '''.*sealed-secret\.ya?ml$''',
+            # External Secrets Operator: an ExternalSecret carries a remoteRef -- the PATH of a
+            # value in Infisical -- and a SecretStore carries an identity id and endpoint. The
+            # value itself never appears. gitleaks 8.21's kubernetes-secret-yaml rule reads the
+            # remoteRef key name as a secret and fails every GitOps repo that uses ESO.
+            '''.*external-secret\.ya?ml$''',
+            '''.*\.external-secret\.ya?ml$''',
+            '''(^|/)secret-store\.ya?ml$''',
           ]
           regexes = [
             # Bitnami SealedSecret encrypted blobs always start with Ag[A-D] and are 100+ chars
