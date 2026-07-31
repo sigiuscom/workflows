@@ -68,9 +68,11 @@ jobs:
             # value in Infisical -- and a SecretStore carries an identity id and endpoint. The
             # value itself never appears. gitleaks 8.21's kubernetes-secret-yaml rule reads the
             # remoteRef key name as a secret and fails every GitOps repo that uses ESO.
-            '''.*external-secret\.ya?ml$''',
-            '''.*\.external-secret\.ya?ml$''',
-            '''(^|/)secret-store\.ya?ml$''',
+            # Both spellings are in use across the estate: `*.externalsecret.yaml` (callhero,
+            # langfuse, holmesgpt, ...) and `*external-secret.yaml` (observability, prbuff).
+            '''.*\.external[-_]?secrets?\.ya?ml$''',
+            '''(^|/)external[-_]?secrets?\.ya?ml$''',
+            '''(^|/)secret[-_]?stores?\.ya?ml$''',
           ]
           regexes = [
             # Bitnami SealedSecret encrypted blobs always start with Ag[A-D] and are 100+ chars
