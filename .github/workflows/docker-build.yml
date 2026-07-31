@@ -314,7 +314,16 @@ jobs:
               metadata:
                 labels:
                   app.kubernetes.io/name: ${job}
+                annotations:
+                  # backoffLimit is 0, so anything that stops this pod fails the build outright.
+                  # Karpenter consolidation/drift evicted a mid-flight build (2026-07-31,
+                  # "Evicted pod: Drifted"), which reads as a broken Dockerfile in CI and is not.
+                  # A build is short-lived; excluding it from disruption costs nothing.
+                  karpenter.sh/do-not-disrupt: "true"
               spec:
+                # The build never talks to the API server -- the runner does, from outside this
+                # pod. An untrusted Dockerfile's RUN should not find a token here.
+                automountServiceAccountToken: false
                 restartPolicy: Never
                 containers:
                   - name: kaniko
