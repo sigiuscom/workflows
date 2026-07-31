@@ -59,7 +59,8 @@ jobs:
 - Все third-party actions запинены по commit SHA.
 - Все джобы ставят `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'` (Node 20 deprecated, июнь 2026).
 - Дефолтные permissions `contents: read` (least privilege); `docker-build` добавляет `packages: write`, `bump-version` -- `contents: write`.
-- `docker-build` собирает Kaniko Job из runner-пода в `ci-builds`: создаёт временные docker-registry + git Secret'ы, клонирует через `git://` контекст, ждёт Complete/Failed (до ~15 мин), стримит логи, чистит секреты. Только `linux/amd64`.
+- `docker-build` собирает Kaniko Job из runner-пода в `ci-builds`: создаёт временные Secret'ы, клонирует через `git://` контекст, ждёт Complete/Failed (до ~15 мин), стримит логи, чистит секреты. Только `linux/amd64`.
+- **docker-registry Secret создаётся и монтируется только при `push: true`.** Это push-credential, а `push: false` -- валидация Dockerfile из PR, где каждый `RUN` -- код автора PR. Базовые образы публичные и идут через zot-mirror, так что build-only не нуждается в registry-auth. Egress самого namespace ограничен `ci-builds-egress` (azinfra `github-actions-runners/kaniko/networkpolicy.yaml`).
 - GHCR push: `GHCR_TOKEN` если есть, иначе `GITHUB_TOKEN` (`secrets: inherit` / явный проброс из caller).
 - Org-настройка обязательна: reusable workflows из private-репо должны быть разрешены на уровне организации `sigiuscom`.
 

@@ -193,15 +193,48 @@ jobs:
 
           /tmp/kubectl delete job "$job" -n "$KANIKO_NAMESPACE" --ignore-not-found
           /tmp/kubectl delete secret "$docker_secret" "$git_secret" -n "$KANIKO_NAMESPACE" --ignore-not-found
-          /tmp/kubectl create secret docker-registry "$docker_secret" \
-            --namespace "$KANIKO_NAMESPACE" \
-            --docker-server "$INPUT_REGISTRY" \
-            --docker-username "$GITHUB_ACTOR" \
-            --docker-password "${GHCR_TOKEN:-$GH_TOKEN}"
+          # The registry credential is a PUSH credential, and it is only ever needed to push.
+          # A build-only validation runs an untrusted Dockerfile -- every RUN in a pull request's
+          # Dockerfile is code the author chose -- so handing it write access to the registry
+          # trades away the whole point of `push: false`. Base images are public and come through
+          # the zot mirror, so a build-only Kaniko needs no registry auth at all.
+          if [ "$INPUT_PUSH" = "true" ]; then
+            /tmp/kubectl create secret docker-registry "$docker_secret" \
+              --namespace "$KANIKO_NAMESPACE" \
+              --docker-server "$INPUT_REGISTRY" \
+              --docker-username "$GITHUB_ACTOR" \
+              --docker-password "${GHCR_TOKEN:-$GH_TOKEN}"
+          fi
           /tmp/kubectl create secret generic "$git_secret" \
             --namespace "$KANIKO_NAMESPACE" \
             --from-literal=GIT_USERNAME="$GITHUB_ACTOR" \
             --from-literal=GIT_PASSWORD="$GH_TOKEN"
+
+          # Only a pushing build gets the registry credential mounted. Both blocks stay empty on a
+          # build-only run, so the Job manifest references no docker secret at all -- there is
+          # nothing for an untrusted RUN to read out of /kaniko/.docker.
+          docker_mount_file="/tmp/${job}-docker-mount.yaml"
+          docker_volume_file="/tmp/${job}-docker-volume.yaml"
+          : > "$docker_mount_file"
+          : > "$docker_volume_file"
+          # printf, not a heredoc: a nested heredoc terminator has to sit at column 0, which ends
+          # the enclosing YAML block scalar. The indentation below is the Job manifest's own.
+          if [ "$INPUT_PUSH" = "true" ]; then
+            printf '%s\n' \
+              "          volumeMounts:" \
+              "            - name: docker-config" \
+              "              mountPath: /kaniko/.docker" > "$docker_mount_file"
+            printf '%s\n' \
+              "      volumes:" \
+              "        - name: docker-config" \
+              "          projected:" \
+              "            sources:" \
+              "              - secret:" \
+              "                  name: ${docker_secret}" \
+              "                  items:" \
+              "                    - key: .dockerconfigjson" \
+              "                      path: config.json" > "$docker_volume_file"
+          fi
 
           args_file="/tmp/${job}-args.yaml"
           : > "$args_file"
@@ -301,9 +334,7 @@ jobs:
                           secretKeyRef:
                             name: ${git_secret}
                             key: GIT_PASSWORD
-                    volumeMounts:
-                      - name: docker-config
-                        mountPath: /kaniko/.docker
+          $(cat "$docker_mount_file")
                     resources:
                       requests:
                         cpu: 250m
@@ -311,15 +342,7 @@ jobs:
                       limits:
                         cpu: "2"
                         memory: 3Gi
-                volumes:
-                  - name: docker-config
-                    projected:
-                      sources:
-                        - secret:
-                            name: ${docker_secret}
-                            items:
-                              - key: .dockerconfigjson
-                                path: config.json
+          $(cat "$docker_volume_file")
           EOF_JOB
 
           # The Kaniko Job is created through the cluster's admission chain, which includes the
