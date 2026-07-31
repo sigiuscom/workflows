@@ -1,0 +1,145 @@
+name: k8s resource floor (reusable)
+
+# The AKS Deployment Safeguards mutating webhook raises container requests below a floor on
+# admission. It does not reject: it rewrites, and warns. Under ArgoCD that rewrite is drift, so a
+# manifest declaring less than the floor leaves its Application permanently OutOfSync with
+# selfHeal rewriting the object every sync. Declaring less saves nothing -- admission raises it
+# either way -- so the only effect is broken GitOps convergence.
+#
+# Long-lived workloads only. A Job/CronJob pod template is mutated when the pod is created, not
+# on the object ArgoCD tracks, so it produces no drift.
+#
+# Coverage is plain YAML and kustomize bases: a Helm template with `{{ }}` placeholders is not
+# parseable YAML and is skipped. So a green run means "nothing in the checked-in manifests is
+# below the floor", NOT "no workload in this repo is". Charts rendered by Helm need the same
+# discipline and this check will not tell you when they lose it.
+
+on:
+  workflow_call:
+    inputs:
+      paths:
+        description: Space-separated roots to scan
+        type: string
+        required: false
+        default: '.'
+      min-cpu-millicores:
+        type: string
+        required: false
+        default: '100'
+      min-memory-mib:
+        type: string
+        required: false
+        default: '100'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    # Reads pull-request-authored files, so it belongs on the pool that holds no cluster
+    # credentials. See azinfra github-actions-runners/README.md "Trust model".
+    runs-on: aks-untrusted
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+      - name: Install PyYAML
+        run: pip install --quiet pyyaml==6.0.2
+      - name: Check resource requests
+        env:
+          PATHS: ${{ inputs.paths }}
+          MIN_CPU_M: ${{ inputs.min-cpu-millicores }}
+          MIN_MEM_MI: ${{ inputs.min-memory-mib }}
+        run: |
+          python3 - <<'PY'
+          import os, sys, yaml
+
+          KINDS = {"Deployment", "StatefulSet", "DaemonSet"}
+          MIN_CPU_M = float(os.environ["MIN_CPU_M"])
+          MIN_MEM_MI = float(os.environ["MIN_MEM_MI"])
+          SKIP_DIRS = {".git", ".worktrees", "node_modules", ".venv", "vendor"}
+
+          def cpu_millicores(value):
+              text = str(value)
+              return float(text[:-1]) if text.endswith("m") else float(text) * 1000
+
+          def memory_mib(value):
+              text = str(value)
+              units = {"Ki": 1 / 1024, "Mi": 1, "Gi": 1024, "Ti": 1048576,
+                       "K": 1000 / 1048576, "M": 1e6 / 1048576, "G": 1e9 / 1048576}
+              for suffix, factor in sorted(units.items(), key=lambda kv: -len(kv[0])):
+                  if text.endswith(suffix):
+                      return float(text[: -len(suffix)]) * factor
+              return float(text) / 1048576
+
+          def pod_specs(node):
+              """Every pod spec in a manifest, at whatever depth the kind nests it."""
+              if isinstance(node, dict):
+                  if isinstance(node.get("containers"), list):
+                      yield node
+                  for value in node.values():
+                      yield from pod_specs(value)
+              elif isinstance(node, list):
+                  for value in node:
+                      yield from pod_specs(value)
+
+          problems = []
+          scanned = 0
+          for root in os.environ["PATHS"].split():
+              for dirpath, dirnames, filenames in os.walk(root):
+                  dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+                  for filename in filenames:
+                      if not filename.endswith((".yaml", ".yml")):
+                          continue
+                      path = os.path.join(dirpath, filename)
+                      try:
+                          documents = list(yaml.safe_load_all(open(path, encoding="utf-8")))
+                      except Exception:
+                          # A template with Helm/kustomize placeholders is not parseable YAML.
+                          # Skipping it is deliberate: this check is not a YAML linter, and
+                          # yamllint already runs alongside.
+                          continue
+                      for document in documents:
+                          if not isinstance(document, dict) or document.get("kind") not in KINDS:
+                              continue
+                          name = document.get("metadata", {}).get("name", "?")
+                          for spec in pod_specs(document.get("spec", {})):
+                              for container in spec.get("containers", []):
+                                  scanned += 1
+                                  where = (f"{path}: {document['kind']}/{name} "
+                                           f"[{container.get('name', '?')}]")
+                                  requests = (container.get("resources") or {}).get("requests")
+                                  if not requests:
+                                      problems.append(f"{where}: no resource requests declared")
+                                      continue
+                                  try:
+                                      if "cpu" not in requests:
+                                          problems.append(f"{where}: no cpu request")
+                                      elif cpu_millicores(requests["cpu"]) < MIN_CPU_M:
+                                          problems.append(
+                                              f"{where}: cpu request {requests['cpu']} is below "
+                                              f"{MIN_CPU_M:.0f}m")
+                                      if "memory" not in requests:
+                                          problems.append(f"{where}: no memory request")
+                                      elif memory_mib(requests["memory"]) < MIN_MEM_MI:
+                                          problems.append(
+                                              f"{where}: memory request {requests['memory']} is "
+                                              f"below {MIN_MEM_MI:.0f}Mi")
+                                  except ValueError:
+                                      problems.append(
+                                          f"{where}: unparseable request {requests!r}")
+
+          print(f"scanned {scanned} container(s) in long-lived workloads")
+          for problem in problems:
+              print(f"::error::{problem}")
+          if problems:
+              print(
+                  "\nThe AKS Deployment Safeguards webhook rewrites these on admission, which "
+                  "leaves the ArgoCD Application permanently OutOfSync against its own manifest. "
+                  "Declare the floor instead -- it costs nothing, admission applies it either way."
+              )
+              sys.exit(1)
+          PY
