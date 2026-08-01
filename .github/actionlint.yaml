@@ -1,6 +1,7 @@
 self-hosted-runner:
   labels:
     - aks-self-hosted
+    - aks-untrusted
 paths:
   .github/workflows/**/*.{yml,yaml}:
     ignore:
