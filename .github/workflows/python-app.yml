@@ -11,6 +11,11 @@ on:
         type: string
         required: false
         default: '3.12'
+      ruff-version:
+        description: Ruff version installed for linting
+        type: string
+        required: false
+        default: '0.15.22'
       install-cmd:
         description: Override default install command
         type: string
@@ -55,6 +60,7 @@ jobs:
       - name: Install
         env:
           INSTALL_CMD: ${{ inputs.install-cmd }}
+          RUFF_VERSION: ${{ inputs.ruff-version }}
         run: |
           set -e
           if [ -n "$INSTALL_CMD" ]; then
@@ -65,7 +71,7 @@ jobs:
             pip install -r requirements.txt
             [ -f requirements-dev.txt ] && pip install -r requirements-dev.txt || true
           fi
-          pip install ruff pytest
+          pip install "ruff==$RUFF_VERSION" pytest
 
       - name: Lint (ruff)
         if: inputs.lint
