@@ -72,6 +72,9 @@ jobs:
 | `python-app.yml` | pip install + ruff + optional mypy + pytest |
 | `docker-build.yml` | Kaniko image builds on AKS runners with optional push, Trivy scan, registry mirrors, and retry controls |
 
+`python-app.yml` pins Ruff to `0.15.22` by default for reproducible lint results.
+Callers can set `ruff-version` when deliberately upgrading their lint toolchain.
+
 ## Conventions
 
 - All actions are pinned by commit SHA.
