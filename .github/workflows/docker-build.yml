@@ -429,6 +429,13 @@ jobs:
           sparse-checkout: .trivyignore
           sparse-checkout-cone-mode: false
 
+      - name: Detect Trivy ignore file
+        id: trivy-ignore
+        run: |
+          if [ -f .trivyignore ]; then
+            echo 'path=.trivyignore' >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           TRIVY_USERNAME: ${{ github.actor }}
@@ -440,4 +447,4 @@ jobs:
           severity: ${{ inputs.trivy-severity }}
           ignore-unfixed: ${{ inputs.trivy-ignore-unfixed }}
           exit-code: '1'
-          trivyignores: '.trivyignore'
+          trivyignores: ${{ steps.trivy-ignore.outputs.path }}
