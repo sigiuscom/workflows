@@ -78,6 +78,26 @@ on:
         type: boolean
         required: false
         default: true
+      kaniko-cache:
+        description: Reuse pushed image layers through a remote Kaniko cache
+        type: boolean
+        required: false
+        default: true
+      kaniko-cache-ttl:
+        description: Maximum age of remote Kaniko cache entries
+        type: string
+        required: false
+        default: '168h'
+    outputs:
+      image-tag:
+        description: Primary immutable image tag selected by the build
+        value: ${{ jobs.build.outputs.image-tag }}
+      image-digest:
+        description: Registry digest of the pushed primary image
+        value: ${{ jobs.build.outputs.image-digest }}
+      image-ref:
+        description: Primary tag pinned to its registry digest
+        value: ${{ jobs.build.outputs.image-ref }}
     secrets:
       GHCR_TOKEN:
         required: false
@@ -91,6 +111,8 @@ jobs:
     runs-on: aks-self-hosted
     outputs:
       image-tag: ${{ steps.tags.outputs.primary }}
+      image-digest: ${{ steps.tags.outputs.digest }}
+      image-ref: ${{ steps.tags.outputs.reference }}
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
       KANIKO_NAMESPACE: ci-builds
@@ -146,6 +168,8 @@ jobs:
           INPUT_REGISTRY_MAPS: ${{ inputs.registry-maps }}
           INPUT_INSECURE_REGISTRIES: ${{ inputs.insecure-registries }}
           INPUT_IMAGE_DOWNLOAD_RETRY: ${{ inputs.image-download-retry }}
+          INPUT_KANIKO_CACHE: ${{ inputs.kaniko-cache }}
+          INPUT_KANIKO_CACHE_TTL: ${{ inputs.kaniko-cache-ttl }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         run: |
@@ -250,11 +274,16 @@ jobs:
           add_arg "--dockerfile=${dockerfile}"
           add_arg "--verbosity=info"
           add_arg "--push-retry=2"
+          add_arg "--digest-file=/dev/termination-log"
           if [ "$INPUT_IMAGE_DOWNLOAD_RETRY" != "0" ]; then
             add_arg "--image-download-retry=${INPUT_IMAGE_DOWNLOAD_RETRY}"
           fi
           if [ "$INPUT_PUSH" != "true" ]; then
             add_arg "--no-push"
+          elif [ "$INPUT_KANIKO_CACHE" = "true" ]; then
+            add_arg "--cache=true"
+            add_arg "--cache-repo=${INPUT_IMAGE}-cache"
+            add_arg "--cache-ttl=${INPUT_KANIKO_CACHE_TTL}"
           fi
           while IFS= read -r registry_mirror; do
             if [ -n "$registry_mirror" ]; then
@@ -416,6 +445,18 @@ jobs:
             /tmp/kubectl describe "job/${job}" -n "$KANIKO_NAMESPACE"
             exit "$status"
           fi
+          digest="$(/tmp/kubectl get pods -n "$KANIKO_NAMESPACE" \
+            -l "job-name=${job}" \
+            -o jsonpath='{.items[0].status.containerStatuses[0].state.terminated.message}')"
+          case "$digest" in
+            sha256:*) ;;
+            *)
+              echo "::error::Kaniko did not publish an image digest"
+              exit 1
+              ;;
+          esac
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "reference=${primary_tag}@${digest}" >> "$GITHUB_OUTPUT"
 
   scan:
     if: ${{ inputs.trivy-scan && inputs.push }}
@@ -442,7 +483,7 @@ jobs:
           TRIVY_PASSWORD: ${{ secrets.GHCR_TOKEN || github.token }}
           TRIVY_IMAGE_SRC: remote
         with:
-          image-ref: ${{ needs.build.outputs.image-tag }}
+          image-ref: ${{ needs.build.outputs.image-ref }}
           scanners: 'vuln'
           severity: ${{ inputs.trivy-severity }}
           ignore-unfixed: ${{ inputs.trivy-ignore-unfixed }}
