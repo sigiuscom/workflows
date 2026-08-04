@@ -36,6 +36,13 @@ def test_build_only_path_still_has_no_registry_secret_mount():
     assert 'add_arg "--no-push"' in text
 
 
+def test_default_primary_tag_contains_short_commit():
+    text = WORKFLOW.read_text()
+    immutable = 'echo "${INPUT_IMAGE}:${ref_name}-${short_sha}" >> "$tags_file"'
+    moving = 'echo "${INPUT_IMAGE}:${ref_name}" >> "$tags_file"'
+    assert text.index(immutable) < text.index(moving)
+
+
 def test_scan_uses_digest_reference():
     workflow = document()
     build_outputs = workflow["jobs"]["build"]["outputs"]

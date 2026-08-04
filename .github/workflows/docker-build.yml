@@ -208,8 +208,8 @@ jobs:
             echo "${INPUT_IMAGE}:${major}" >> "$tags_file"
             echo "${INPUT_IMAGE}:latest" >> "$tags_file"
           else
-            echo "${INPUT_IMAGE}:${ref_name}" >> "$tags_file"
             echo "${INPUT_IMAGE}:${ref_name}-${short_sha}" >> "$tags_file"
+            echo "${INPUT_IMAGE}:${ref_name}" >> "$tags_file"
           fi
 
           primary_tag="$(head -1 "$tags_file")"
