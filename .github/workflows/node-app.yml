@@ -40,6 +40,11 @@ on:
         type: string
         required: false
         default: 'build'
+      build-command:
+        description: Optional shell command that replaces package-manager build execution
+        type: string
+        required: false
+        default: ''
       run-tests:
         type: boolean
         required: false
@@ -116,6 +121,10 @@ jobs:
       - name: Build
         if: inputs.run-build
         run: |
+          if [ -n "${{ inputs.build-command }}" ]; then
+            ${{ inputs.build-command }}
+            exit 0
+          fi
           case "${{ inputs.package-manager }}" in
             bun)  bun run ${{ inputs.build-script }} ;;
             npm)  npm run ${{ inputs.build-script }} --if-present ;;
