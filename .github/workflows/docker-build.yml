@@ -49,6 +49,11 @@ on:
         type: string
         required: false
         default: '3'
+      kaniko-memory-limit:
+        description: Kubernetes memory limit for the ephemeral Kaniko build pod
+        type: string
+        required: false
+        default: '3Gi'
       registry:
         type: string
         required: false
@@ -168,6 +173,7 @@ jobs:
           INPUT_REGISTRY_MAPS: ${{ inputs.registry-maps }}
           INPUT_INSECURE_REGISTRIES: ${{ inputs.insecure-registries }}
           INPUT_IMAGE_DOWNLOAD_RETRY: ${{ inputs.image-download-retry }}
+          INPUT_KANIKO_MEMORY_LIMIT: ${{ inputs.kaniko-memory-limit }}
           INPUT_KANIKO_CACHE: ${{ inputs.kaniko-cache }}
           INPUT_KANIKO_CACHE_TTL: ${{ inputs.kaniko-cache-ttl }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -379,7 +385,7 @@ jobs:
                         memory: 512Mi
                       limits:
                         cpu: "2"
-                        memory: 3Gi
+                        memory: ${INPUT_KANIKO_MEMORY_LIMIT}
           $(cat "$docker_volume_file")
           EOF_JOB
 
