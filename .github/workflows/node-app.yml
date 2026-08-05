@@ -81,12 +81,18 @@ jobs:
           version: ${{ inputs.pnpm-version }}
           run_install: false
 
-      - name: Setup node
-        if: inputs.package-manager != 'bun' || inputs.build-command != ''
+      - name: Setup node for direct build
+        if: inputs.package-manager == 'bun' && inputs.build-command != ''
         uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
-          cache: ${{ inputs.package-manager == 'bun' && '' || inputs.package-manager }}
+
+      - name: Setup node
+        if: inputs.package-manager != 'bun'
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.package-manager }}
 
       - name: Install
         run: |
