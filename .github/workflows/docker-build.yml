@@ -83,6 +83,16 @@ on:
         type: boolean
         required: false
         default: true
+      trivy-server:
+        description: Shared Trivy server URL for vulnerability DB and result cache
+        type: string
+        required: false
+        default: 'http://trivy-service.trivy-system:4954'
+      trivy-timeout:
+        description: Maximum duration of one image vulnerability scan
+        type: string
+        required: false
+        default: '10m'
       kaniko-cache:
         description: Reuse pushed image layers through a remote Kaniko cache
         type: boolean
@@ -470,6 +480,7 @@ jobs:
     runs-on: aks-self-hosted
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+      TRIVY_SERVER: ${{ inputs.trivy-server }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -495,3 +506,4 @@ jobs:
           ignore-unfixed: ${{ inputs.trivy-ignore-unfixed }}
           exit-code: '1'
           trivyignores: ${{ steps.trivy-ignore.outputs.path }}
+          timeout: ${{ inputs.trivy-timeout }}
