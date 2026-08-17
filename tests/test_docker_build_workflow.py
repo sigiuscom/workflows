@@ -51,3 +51,14 @@ def test_scan_uses_digest_reference():
     scan = workflow["jobs"]["scan"]
     serialized = yaml.safe_dump(scan)
     assert "needs.build.outputs.image-ref" in serialized
+
+
+def test_scan_uses_cluster_server_and_bounded_timeout():
+    workflow = document()
+    inputs = workflow["on"]["workflow_call"]["inputs"]
+    scan = workflow["jobs"]["scan"]
+
+    assert inputs["trivy-server"]["default"] == "http://trivy-service.trivy-system:4954"
+    assert inputs["trivy-timeout"]["default"] == "10m"
+    assert scan["env"]["TRIVY_SERVER"] == "${{ inputs.trivy-server }}"
+    assert scan["steps"][-1]["with"]["timeout"] == "${{ inputs.trivy-timeout }}"
