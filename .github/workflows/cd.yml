@@ -113,7 +113,7 @@ jobs:
 
   bump:
     needs: strategy
-    uses: sigiuscom/workflows/.github/workflows/bump-version.yml@675c2dd410d0501716c4f42801856cac954269ba  # main
+    uses: sigiuscom/workflows/.github/workflows/bump-version.yml@8ea3068a2c3df0b8b85387803faed536b266673b  # main
     with:
       version-file: ${{ inputs.version-file }}
       strategy: ${{ needs.strategy.outputs.level }}
@@ -127,7 +127,7 @@ jobs:
       max-parallel: 5
       matrix:
         img: ${{ fromJSON(inputs.images) }}
-    uses: sigiuscom/workflows/.github/workflows/docker-build.yml@675c2dd410d0501716c4f42801856cac954269ba  # main
+    uses: sigiuscom/workflows/.github/workflows/docker-build.yml@8ea3068a2c3df0b8b85387803faed536b266673b  # main
     with:
       image: ${{ matrix.img.image }}
       context: ${{ matrix.img.context || '.' }}
