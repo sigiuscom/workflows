@@ -1,10 +1,10 @@
 # AGENTS.md
 
-This file gives guidance to OpenAI Codex and other AI coding agents working in this repository; it mirrors CLAUDE.md.
+Shared guidance for coding agents; `CLAUDE.md` links to this file.
 
 ## Что это
 
-`sigiuscom/workflows` -- центральный репозиторий **reusable GitHub Actions workflows** для всех `sigiuscom/*` репо. Каждый workflow объявлен через `on: workflow_call:` и вызывается из caller-репозиториев по ссылке `sigiuscom/workflows/.github/workflows/<name>.yml@main`. Все джобы исполняются на self-hosted ARC-раннерах в AKS (label `aks-self-hosted`); сборка образов идёт через Kaniko Job в namespace `ci-builds` (Docker daemon / DinD запрещён политикой AKS).
+`sigiuscom/workflows` -- центральный репозиторий **reusable GitHub Actions workflows** для всех `sigiuscom/*` репо. Reusable entrypoints объявлены через `on: workflow_call:` и вызываются из caller-репозиториев по ссылке `sigiuscom/workflows/.github/workflows/<name>.yml@main`. Pool ARC-раннеров в AKS задаётся `runs-on` каждого job: существующая trusted orchestration использует `aks-self-hosted`, а Python self-CI tests запускают код PR на `aks-untrusted`; не переносить этот untrusted execution на trusted pool.  сборка образов идёт через Kaniko Job в namespace `ci-builds` (Docker daemon / DinD запрещён политикой AKS).
 
 ## Состав / структура
 
@@ -59,7 +59,8 @@ jobs:
 - Все third-party actions запинены по commit SHA.
 - Все джобы ставят `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'` (Node 20 deprecated, июнь 2026).
 - Дефолтные permissions `contents: read` (least privilege); `docker-build` добавляет `packages: write`, `bump-version` -- `contents: write`.
-- `docker-build` собирает Kaniko Job из runner-пода в `ci-builds`: создаёт временные docker-registry + git Secret'ы, клонирует через `git://` контекст, ждёт Complete/Failed (до ~15 мин), стримит логи, чистит секреты. Только `linux/amd64`.
+- `docker-build` собирает Kaniko Job из runner-пода в `ci-builds`: создаёт временные Secret'ы, клонирует через `git://` контекст, ждёт Complete/Failed (до ~15 мин), стримит логи, чистит секреты. Только `linux/amd64`.
+- **docker-registry Secret создаётся и монтируется только при `push: true`.** Это push-credential, а `push: false` -- валидация Dockerfile из PR, где каждый `RUN` -- код автора PR. Базовые образы публичные и идут через zot-mirror, так что build-only не нуждается в registry-auth. Egress самого namespace ограничен `ci-builds-egress` (azinfra `github-actions-runners/kaniko/networkpolicy.yaml`).
 - GHCR push: `GHCR_TOKEN` если есть, иначе `GITHUB_TOKEN` (`secrets: inherit` / явный проброс из caller).
 - Org-настройка обязательна: reusable workflows из private-репо должны быть разрешены на уровне организации `sigiuscom`.
 
