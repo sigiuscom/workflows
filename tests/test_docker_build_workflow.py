@@ -91,7 +91,9 @@ elif args[0] == "get" and "Complete" in args[-1]:
     fake.chmod(0o755)
     # Only redirect absolute scratch/tool paths; execute all production decisions.
     script = step["run"].replace("/tmp/", str(tmp_path) + "/")
-    env = {"PATH": os.environ["PATH"], "FIXTURE_DIR": str(tmp_path)}
+    # setup-python needs its Linux shared-library path when launching the fake kubectl.
+    env = {key: os.environ[key] for key in ("PATH", "LD_LIBRARY_PATH") if key in os.environ}
+    env["FIXTURE_DIR"] = str(tmp_path)
     env.update({key: "" for key in step["env"]})
     env.update({
         "INPUT_PUSH": push, "INPUT_CONTEXT": ".", "INPUT_IMAGE": "example.invalid/app",
