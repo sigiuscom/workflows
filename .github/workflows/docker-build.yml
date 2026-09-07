@@ -191,9 +191,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          job="kaniko-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RANDOM}"
-          docker_secret="${job}-docker"
-          git_secret="${job}-git"
+          job_base="kaniko-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RANDOM}"
+          docker_secret="${job_base}-docker"
+          git_secret="${job_base}-git"
           ref="${INPUT_REF:-$GITHUB_SHA}"
           context="${INPUT_CONTEXT#./}"
           if [ -z "$context" ]; then
@@ -213,7 +213,7 @@ jobs:
 
           ref_name="${GITHUB_REF_NAME//\//-}"
           short_sha="${GITHUB_SHA:0:7}"
-          tags_file="/tmp/${job}-tags.txt"
+          tags_file="/tmp/${job_base}-tags.txt"
           : > "$tags_file"
           if [ -n "$INPUT_VERSION" ]; then
             version="${INPUT_VERSION#v}"
@@ -231,8 +231,12 @@ jobs:
           primary_tag="$(head -1 "$tags_file")"
           echo "primary=${primary_tag}" >> "$GITHUB_OUTPUT"
 
-          /tmp/kubectl delete job "$job" -n "$KANIKO_NAMESPACE" --ignore-not-found
           /tmp/kubectl delete secret "$docker_secret" "$git_secret" -n "$KANIKO_NAMESPACE" --ignore-not-found
+          cleanup_secrets() {
+            /tmp/kubectl delete secret "$docker_secret" "$git_secret" \
+              -n "$KANIKO_NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
+          }
+          trap cleanup_secrets EXIT
           # The registry credential is a PUSH credential, and it is only ever needed to push.
           # A build-only validation runs an untrusted Dockerfile -- every RUN in a pull request's
           # Dockerfile is code the author chose -- so handing it write access to the registry
@@ -253,8 +257,8 @@ jobs:
           # Only a pushing build gets the registry credential mounted. Both blocks stay empty on a
           # build-only run, so the Job manifest references no docker secret at all -- there is
           # nothing for an untrusted RUN to read out of /kaniko/.docker.
-          docker_mount_file="/tmp/${job}-docker-mount.yaml"
-          docker_volume_file="/tmp/${job}-docker-volume.yaml"
+          docker_mount_file="/tmp/${job_base}-docker-mount.yaml"
+          docker_volume_file="/tmp/${job_base}-docker-volume.yaml"
           : > "$docker_mount_file"
           : > "$docker_volume_file"
           # printf, not a heredoc: a nested heredoc terminator has to sit at column 0, which ends
@@ -276,7 +280,7 @@ jobs:
               "                      path: config.json" > "$docker_volume_file"
           fi
 
-          args_file="/tmp/${job}-args.yaml"
+          args_file="/tmp/${job_base}-args.yaml"
           : > "$args_file"
           add_arg() {
             printf '                - %s\n' "$1" >> "$args_file"
@@ -346,7 +350,9 @@ jobs:
           $INPUT_BUILD_ARGS
           EOF_BUILD_ARGS
 
-          cat > "/tmp/${job}.yaml" <<EOF_JOB
+          render_job() {
+            job="$1"
+            cat > "/tmp/${job}.yaml" <<EOF_JOB
           apiVersion: batch/v1
           kind: Job
           metadata:
@@ -398,6 +404,7 @@ jobs:
                         memory: ${INPUT_KANIKO_MEMORY_LIMIT}
           $(cat "$docker_volume_file")
           EOF_JOB
+          }
 
           # The Kaniko Job is created through the cluster's admission chain, which includes the
           # AKS-managed safeguards mutating webhook (failurePolicy: Fail). When that webhook is
@@ -410,6 +417,7 @@ jobs:
           # attempt: retrying those hides a real error behind a slower red build. `apply` is
           # idempotent, so a retry after a partially-applied attempt is safe.
           apply_job() {
+            job="$1"
             attempt=1
             max_attempts=5
             delay=2
@@ -440,29 +448,63 @@ jobs:
               esac
             done
           }
-          apply_job
-          status=1
-          for _ in $(seq 1 180); do
-            complete="$(/tmp/kubectl get "job/${job}" -n "$KANIKO_NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || true)"
-            failed="$(/tmp/kubectl get "job/${job}" -n "$KANIKO_NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null || true)"
-            if [ "$complete" = "True" ]; then
-              status=0
+
+          is_transient_build_failure() {
+            grep -Eiq \
+              'BLOB_UNKNOWN|i/o timeout|TLS handshake timeout|connection reset by peer|unexpected EOF|temporary failure in name resolution|dial tcp.*(timeout|connection refused)' \
+              "$1"
+          }
+
+          build_attempt=1
+          max_build_attempts=3
+          retry_delay=2
+          successful_job=""
+          while [ "$build_attempt" -le "$max_build_attempts" ]; do
+            job="${job_base}-${build_attempt}"
+            logs_file="/tmp/${job}-logs.txt"
+            /tmp/kubectl delete job "$job" -n "$KANIKO_NAMESPACE" --ignore-not-found
+            render_job "$job"
+            apply_job "$job"
+
+            status=1
+            for _ in $(seq 1 180); do
+              complete="$(/tmp/kubectl get "job/${job}" -n "$KANIKO_NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || true)"
+              failed="$(/tmp/kubectl get "job/${job}" -n "$KANIKO_NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null || true)"
+              if [ "$complete" = "True" ]; then
+                status=0
+                break
+              fi
+              if [ "$failed" = "True" ]; then
+                break
+              fi
+              sleep 5
+            done
+            /tmp/kubectl logs "job/${job}" -n "$KANIKO_NAMESPACE" --tail=-1 \
+              2>&1 | tee "$logs_file" || true
+            if [ "$status" -eq 0 ]; then
+              successful_job="$job"
               break
             fi
-            if [ "$failed" = "True" ]; then
-              status=1
-              break
+
+            /tmp/kubectl describe "job/${job}" -n "$KANIKO_NAMESPACE" || true
+            if ! is_transient_build_failure "$logs_file"; then
+              echo "kaniko: non-transient build failure; not retrying" >&2
+              exit 1
             fi
-            sleep 5
+            if [ "$build_attempt" -ge "$max_build_attempts" ]; then
+              echo "kaniko: transient build failure persisted for ${build_attempt} attempts" >&2
+              exit 1
+            fi
+
+            echo "kaniko: transient registry or network failure, retry ${build_attempt}/${max_build_attempts} with a fresh Job in ${retry_delay}s" >&2
+            /tmp/kubectl delete job "$job" -n "$KANIKO_NAMESPACE" --ignore-not-found
+            sleep "$retry_delay"
+            retry_delay=$((retry_delay * 2))
+            build_attempt=$((build_attempt + 1))
           done
-          /tmp/kubectl logs "job/${job}" -n "$KANIKO_NAMESPACE" --tail=-1
-          /tmp/kubectl delete secret "$docker_secret" "$git_secret" -n "$KANIKO_NAMESPACE" --ignore-not-found
-          if [ "$status" -ne 0 ]; then
-            /tmp/kubectl describe "job/${job}" -n "$KANIKO_NAMESPACE"
-            exit "$status"
-          fi
+
           digest="$(/tmp/kubectl get pods -n "$KANIKO_NAMESPACE" \
-            -l "job-name=${job}" \
+            -l "job-name=${successful_job}" \
             -o jsonpath='{.items[0].status.containerStatuses[0].state.terminated.message}')"
           case "$digest" in
             sha256:*) ;;
