@@ -75,6 +75,12 @@ jobs:
 `python-app.yml` pins Ruff to `0.15.22` by default for reproducible lint results.
 Callers can set `ruff-version` when deliberately upgrading their lint toolchain.
 
+`docker-build.yml` keeps Kaniko Jobs at `backoffLimit: 0`, but starts a fresh
+Job up to three total times when build logs contain an allowlisted transient
+registry or network failure such as `BLOB_UNKNOWN` or a transport timeout.
+Permanent build errors fail immediately. Retries preserve the immutable source,
+destinations, registry routing, and build-only credential boundary.
+
 ## Conventions
 
 - All actions are pinned by commit SHA.
