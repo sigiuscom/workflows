@@ -125,3 +125,101 @@ elif args[0] == "get" and "Complete" in args[-1]:
         assert "--no-push" in container["args"]
         assert "--cache=true" not in container["args"]
         assert "synthetic-push-token" not in (tmp_path / "job.yaml").read_text()
+
+
+def run_build_failure_fixture(tmp_path, scenario):
+    step = next(step for step in document()["jobs"]["build"]["steps"] if step.get("id") == "tags")
+    fake = tmp_path / "kubectl"
+    fake.write_text(f"#!{sys.executable}\n" + """
+import json, os, pathlib, shutil, sys
+args = sys.argv[1:]
+root = pathlib.Path(os.environ["FIXTURE_DIR"])
+with (root / "commands.jsonl").open("a") as log:
+    log.write(json.dumps(args) + "\\n")
+if args[0] == "apply":
+    count_file = root / "apply-count"
+    count = int(count_file.read_text()) + 1 if count_file.exists() else 1
+    count_file.write_text(str(count))
+    shutil.copyfile(args[2], root / f"job-{count}.yaml")
+elif args[0] == "get" and args[1].startswith("job/"):
+    count = int((root / "apply-count").read_text())
+    condition = args[-1]
+    if os.environ["SCENARIO"] in {"permanent", "persistent"} or (
+        os.environ["SCENARIO"] == "transient" and count == 1
+    ):
+        print("True" if "Failed" in condition else "")
+    else:
+        print("True" if "Complete" in condition else "")
+elif args[0] == "logs":
+    count = int((root / "apply-count").read_text())
+    if os.environ["SCENARIO"] == "persistent" or (
+        os.environ["SCENARIO"] == "transient" and count == 1
+    ):
+        print("error pulling image: BLOB_UNKNOWN: blob is unknown to registry")
+    elif os.environ["SCENARIO"] == "permanent":
+        print("error building image: Dockerfile parse error")
+elif args[:2] == ["get", "pods"]:
+    print("sha256:" + "a" * 64)
+""")
+    fake.chmod(0o755)
+    sleeper = tmp_path / "sleep"
+    sleeper.write_text("#!/bin/sh\nexit 0\n")
+    sleeper.chmod(0o755)
+    script = step["run"].replace("/tmp/", str(tmp_path) + "/")
+    env = {key: os.environ[key] for key in ("PATH", "LD_LIBRARY_PATH") if key in os.environ}
+    env["PATH"] = f"{tmp_path}:{env['PATH']}"
+    env["FIXTURE_DIR"] = str(tmp_path)
+    env["SCENARIO"] = scenario
+    env.update({key: "" for key in step["env"]})
+    env.update({
+        "INPUT_PUSH": "false", "INPUT_CONTEXT": ".", "INPUT_IMAGE": "example.invalid/app",
+        "INPUT_REGISTRY": "example.invalid", "INPUT_IMAGE_DOWNLOAD_RETRY": "3",
+        "INPUT_KANIKO_MEMORY_LIMIT": "3Gi", "INPUT_KANIKO_CACHE": "true",
+        "INPUT_KANIKO_CACHE_TTL": "168h", "GH_TOKEN": "synthetic-read-token",
+        "GHCR_TOKEN": "", "GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1",
+        "GITHUB_SHA": "a" * 40, "GITHUB_REF_NAME": "test", "GITHUB_ACTOR": "tester",
+        "GITHUB_SERVER_URL": "https://example.invalid", "GITHUB_REPOSITORY": "test/repo",
+        "GITHUB_OUTPUT": str(tmp_path / "outputs"), "KANIKO_NAMESPACE": "test",
+        "KANIKO_IMAGE": "example.invalid/kaniko",
+    })
+    return subprocess.run(
+        ["bash", "-c", script],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+
+def test_transient_registry_failure_retries_with_fresh_job(tmp_path):
+    result = run_build_failure_fixture(tmp_path, "transient")
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "apply-count").read_text() == "2"
+    first = yaml.safe_load((tmp_path / "job-1.yaml").read_text())
+    second = yaml.safe_load((tmp_path / "job-2.yaml").read_text())
+    assert first["metadata"]["name"] != second["metadata"]["name"]
+    assert first["spec"]["backoffLimit"] == second["spec"]["backoffLimit"] == 0
+    assert first["spec"]["template"]["spec"]["containers"][0]["args"] == (
+        second["spec"]["template"]["spec"]["containers"][0]["args"]
+    )
+    for job in (first, second):
+        pod = job["spec"]["template"]["spec"]
+        assert not pod.get("volumes")
+        assert not pod["containers"][0].get("volumeMounts")
+
+
+def test_permanent_build_failure_is_not_retried(tmp_path):
+    result = run_build_failure_fixture(tmp_path, "permanent")
+
+    assert result.returncode != 0
+    assert (tmp_path / "apply-count").read_text() == "1"
+    assert "non-transient build failure; not retrying" in result.stderr
+
+
+def test_persistent_transient_failure_stops_after_three_jobs(tmp_path):
+    result = run_build_failure_fixture(tmp_path, "persistent")
+
+    assert result.returncode != 0
+    assert (tmp_path / "apply-count").read_text() == "3"
+    assert "transient build failure persisted for 3 attempts" in result.stderr
