@@ -451,7 +451,7 @@ jobs:
 
           is_transient_build_failure() {
             grep -Eiq \
-              'BLOB_UNKNOWN|i/o timeout|TLS handshake timeout|connection reset by peer|unexpected EOF|temporary failure in name resolution|dial tcp.*(timeout|connection refused)' \
+              'BLOB_UNKNOWN|i/o timeout|TLS handshake timeout|connection reset by peer|unexpected EOF|temporary failure in name resolution|dial tcp.*(timeout|connection refused)|stream error: stream ID [0-9]+; INTERNAL_ERROR; received from peer' \
               "$1"
           }
 

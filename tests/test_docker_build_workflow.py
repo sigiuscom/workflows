@@ -145,7 +145,7 @@ elif args[0] == "get" and args[1].startswith("job/"):
     count = int((root / "apply-count").read_text())
     condition = args[-1]
     if os.environ["SCENARIO"] in {"permanent", "persistent"} or (
-        os.environ["SCENARIO"] == "transient" and count == 1
+        os.environ["SCENARIO"] in {"transient", "http2-stream"} and count == 1
     ):
         print("True" if "Failed" in condition else "")
     else:
@@ -156,6 +156,11 @@ elif args[0] == "logs":
         os.environ["SCENARIO"] == "transient" and count == 1
     ):
         print("error pulling image: BLOB_UNKNOWN: blob is unknown to registry")
+    elif os.environ["SCENARIO"] == "http2-stream" and count == 1:
+        print(
+            "failed to get filesystem from image: stream error: "
+            "stream ID 11; INTERNAL_ERROR; received from peer"
+        )
     elif os.environ["SCENARIO"] == "permanent":
         print("error building image: Dockerfile parse error")
 elif args[:2] == ["get", "pods"]:
@@ -207,6 +212,13 @@ def test_transient_registry_failure_retries_with_fresh_job(tmp_path):
         pod = job["spec"]["template"]["spec"]
         assert not pod.get("volumes")
         assert not pod["containers"][0].get("volumeMounts")
+
+
+def test_transient_http2_stream_failure_retries_with_fresh_job(tmp_path):
+    result = run_build_failure_fixture(tmp_path, "http2-stream")
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "apply-count").read_text() == "2"
 
 
 def test_permanent_build_failure_is_not_retried(tmp_path):
