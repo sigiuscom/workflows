@@ -62,6 +62,7 @@ jobs:
 - `docker-build` собирает Kaniko Job из runner-пода в `ci-builds`: создаёт временные Secret'ы, клонирует через `git://` контекст, ждёт Complete/Failed (до ~15 мин), стримит логи, чистит секреты. Только `linux/amd64`.
 - **docker-registry Secret создаётся и монтируется только при `push: true`.** Это push-credential, а `push: false` -- валидация Dockerfile из PR, где каждый `RUN` -- код автора PR. Базовые образы публичные и идут через zot-mirror, так что build-only не нуждается в registry-auth. Egress самого namespace ограничен `ci-builds-egress` (azinfra `github-actions-runners/kaniko/networkpolicy.yaml`).
 - GHCR push: `GHCR_TOKEN` если есть, иначе `GITHUB_TOKEN` (`secrets: inherit` / явный проброс из caller).
+- Не-GHCR registry (например ACR): `REGISTRY_USERNAME` + `REGISTRY_PASSWORD`. Они перекрывают `github.actor`/`GHCR_TOKEN` и в push-секрете Kaniko, и в Trivy-скане. Не заданы -- поведение прежнее.
 - Org-настройка обязательна: reusable workflows из private-репо должны быть разрешены на уровне организации `sigiuscom`.
 
 ## Связанное

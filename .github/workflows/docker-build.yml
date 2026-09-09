@@ -116,6 +116,12 @@ on:
     secrets:
       GHCR_TOKEN:
         required: false
+      REGISTRY_USERNAME:
+        description: Registry username when the target is not GHCR (e.g. an ACR scope-map token)
+        required: false
+      REGISTRY_PASSWORD:
+        description: Registry password when the target is not GHCR
+        required: false
 
 permissions:
   contents: read
@@ -188,6 +194,8 @@ jobs:
           INPUT_KANIKO_CACHE_TTL: ${{ inputs.kaniko-cache-ttl }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
         run: |
           set -euo pipefail
 
@@ -246,8 +254,8 @@ jobs:
             /tmp/kubectl create secret docker-registry "$docker_secret" \
               --namespace "$KANIKO_NAMESPACE" \
               --docker-server "$INPUT_REGISTRY" \
-              --docker-username "$GITHUB_ACTOR" \
-              --docker-password "${GHCR_TOKEN:-$GH_TOKEN}"
+              --docker-username "${REGISTRY_USERNAME:-$GITHUB_ACTOR}" \
+              --docker-password "${REGISTRY_PASSWORD:-${GHCR_TOKEN:-$GH_TOKEN}}"
           fi
           /tmp/kubectl create secret generic "$git_secret" \
             --namespace "$KANIKO_NAMESPACE" \
@@ -538,8 +546,8 @@ jobs:
 
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
-          TRIVY_USERNAME: ${{ github.actor }}
-          TRIVY_PASSWORD: ${{ secrets.GHCR_TOKEN || github.token }}
+          TRIVY_USERNAME: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD || secrets.GHCR_TOKEN || github.token }}
           TRIVY_IMAGE_SRC: remote
         with:
           image-ref: ${{ needs.build.outputs.image-ref }}
