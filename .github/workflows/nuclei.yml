@@ -180,4 +180,5 @@ jobs:
             /tmp/nuclei.sarif
             /tmp/nuclei.jsonl
           if-no-files-found: ignore
-          retention-days: 7
+          # See the note in gitleaks.yml.
+          retention-days: 1
