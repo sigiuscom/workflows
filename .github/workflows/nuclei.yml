@@ -172,7 +172,7 @@ jobs:
           fi
 
       - name: Upload reports
-        if: always()
+        if: always() && vars.ACTIONS_ARTIFACTS_ENABLED == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: nuclei-reports
