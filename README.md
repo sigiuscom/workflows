@@ -83,6 +83,14 @@ destinations, registry routing, and build-only credential boundary.
 
 ## Conventions
 
+Artifact uploads are temporarily off while the Actions storage quota is exhausted.
+Scanners still run and fail on findings. Reports remain in job logs where emitted.
+After quota recovery, set the **calling repository's** Actions variable
+`ACTIONS_ARTIFACTS_ENABLED=true` to restore uploads. An unset or false value keeps
+uploads off; GitHub Free private repositories cannot rely on organization variables.
+Pinned callers must use a revision containing this guard; rerunning an older
+revision does not apply it.
+
 - All actions are pinned by commit SHA.
 - All jobs set `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true` (Node 20 deprecation in June 2026).
 - All jobs run on `ubuntu-24.04`.

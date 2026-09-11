@@ -107,7 +107,7 @@ jobs:
           opengrep "${args[@]}" "${paths[@]}"
 
       - name: Upload SARIF
-        if: always()
+        if: always() && vars.ACTIONS_ARTIFACTS_ENABLED == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: opengrep-sarif
