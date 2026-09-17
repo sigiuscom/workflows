@@ -93,6 +93,14 @@ on:
         type: string
         required: false
         default: '10m'
+      build-timeout-minutes:
+        description: >-
+          Total budget for this job, covering every build attempt. The wait for a
+          Kaniko Job ends five minutes before it so the timeout can be reported
+          rather than surfacing as a cancelled job.
+        type: number
+        required: false
+        default: 45
       kaniko-cache:
         description: Reuse pushed image layers through a remote Kaniko cache
         type: boolean
@@ -130,6 +138,11 @@ permissions:
 jobs:
   build:
     runs-on: aks-self-hosted
+    # Backstop above the inner wait: a stuck build must not hold a runner for
+    # GitHub's 360-minute default while other jobs queue behind it. Derived from the
+    # input rather than fixed, so raising the wait does not create a job that GitHub
+    # kills before its own timeout can report anything.
+    timeout-minutes: ${{ inputs.build-timeout-minutes }}
     outputs:
       image-tag: ${{ steps.tags.outputs.primary }}
       image-digest: ${{ steps.tags.outputs.digest }}
@@ -156,6 +169,21 @@ jobs:
               exit 1
               ;;
           esac
+          # type: number does not mean integer, and the value drives shell arithmetic
+          # twice -- a fractional one aborts the step, a zero empties the wait loop.
+          timeout="${{ inputs.build-timeout-minutes }}"
+          case "$timeout" in
+            ''|*[!0-9]*)
+              echo "::error::build-timeout-minutes must be a positive integer, got '${timeout}'"
+              exit 1
+              ;;
+          esac
+          # The shell window is the budget minus five minutes, so anything below six
+          # leaves no window at all and the loop would never poll.
+          if [ "$timeout" -lt 6 ]; then
+            echo "::error::build-timeout-minutes must be at least 6, got '${timeout}'"
+            exit 1
+          fi
 
       - name: Install kubectl
         run: |
@@ -190,6 +218,7 @@ jobs:
           INPUT_INSECURE_REGISTRIES: ${{ inputs.insecure-registries }}
           INPUT_IMAGE_DOWNLOAD_RETRY: ${{ inputs.image-download-retry }}
           INPUT_KANIKO_MEMORY_LIMIT: ${{ inputs.kaniko-memory-limit }}
+          INPUT_BUILD_TIMEOUT_MINUTES: ${{ inputs.build-timeout-minutes }}
           INPUT_KANIKO_CACHE: ${{ inputs.kaniko-cache }}
           INPUT_KANIKO_CACHE_TTL: ${{ inputs.kaniko-cache-ttl }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -369,10 +398,21 @@ jobs:
           spec:
             backoffLimit: 0
             ttlSecondsAfterFinished: 600
+            # Survives the runner. The shell reaps the Job when it stops waiting, but only
+            # if it is alive to do it: an evicted or cancelled runner would otherwise leave
+            # Kaniko snapshotting against a disk the next build needs, forever.
+            #
+            # Deliberately later than the shell's own window. The loop spends
+            # build_deadline_seconds sleeping plus two API round trips per iteration, so
+            # a deadline equal to it always wins -- and then the build reports as
+            # DeadlineExceeded, which reads as a broken Dockerfile instead of a timeout.
+            # A backstop that fires first is not a backstop.
+            activeDeadlineSeconds: ${build_backstop_seconds}
             template:
               metadata:
                 labels:
                   app.kubernetes.io/name: ${job}
+                  app.kubernetes.io/component: kaniko-build
                 annotations:
                   # backoffLimit is 0, so anything that stops this pod fails the build outright.
                   # Karpenter consolidation/drift evicted a mid-flight build (2026-07-31,
@@ -384,6 +424,22 @@ jobs:
                 # pod. An untrusted Dockerfile's RUN should not find a token here.
                 automountServiceAccountToken: false
                 restartPolicy: Never
+                # What actually saturates during a CI wave is disk: several Kaniko pods
+                # snapshotting a full filesystem on one node's disk sit at 13-35 millicores
+                # while the node's CPU is at 4-7 percent. Measured 2026-09-17: 12 builds
+                # at once put 7 on a single node and every one of them missed its window.
+                # Spreading them costs no queueing -- unlike a concurrency cap, a build
+                # still starts immediately; it just starts somewhere else.
+                topologySpreadConstraints:
+                  - maxSkew: 1
+                    topologyKey: kubernetes.io/hostname
+                    whenUnsatisfiable: ScheduleAnyway
+                    # This pod tolerates nothing, so the kata and system pools are
+                    # domains it can never enter. Counting them only dilutes the skew.
+                    nodeTaintsPolicy: Honor
+                    labelSelector:
+                      matchLabels:
+                        app.kubernetes.io/component: kaniko-build
                 containers:
                   - name: kaniko
                     image: ${KANIKO_IMAGE}
@@ -465,17 +521,57 @@ jobs:
 
           build_attempt=1
           max_build_attempts=3
+          # The input is the whole budget for this job, and the bounds count down from
+          # it so each can report before the next one fires: the shell gives up five
+          # minutes early and says so, the Job's own deadline follows two minutes later
+          # and survives a dead runner, and GitHub's job timeout is the last resort.
+          # Equal bounds would mean the outer one always wins, and a build that merely
+          # ran long would be reported as a broken Dockerfile.
+          #
+          # The budget covers all attempts, not one. A BLOB_UNKNOWN -- the fault the
+          # retry exists for -- happens on push, at the end of a build, so budgeting
+          # one attempt would leave the retry unreachable in exactly the case it was
+          # written for.
+          #
+          # The wait is measured against the clock rather than counted in iterations.
+          # Each pass also pays two API round trips, so a loop of N sleeps runs longer
+          # than N*5 seconds by an amount that grows with N: a fixed headroom over a
+          # counted loop holds at a small budget and silently stops holding at a large
+          # one, which is the opposite of what a backstop should do.
+          budget_seconds="$(( (10#$INPUT_BUILD_TIMEOUT_MINUTES - 5) * 60 ))"
+          budget_end_ts="$(( $(date +%s) + budget_seconds ))"
+          min_attempt_seconds=60
           retry_delay=2
           successful_job=""
           while [ "$build_attempt" -le "$max_build_attempts" ]; do
+            remaining="$(( budget_end_ts - $(date +%s) ))"
+            if [ "$remaining" -lt "$min_attempt_seconds" ]; then
+              echo "kaniko: ${remaining}s of the build budget left, not starting attempt ${build_attempt}" >&2
+              exit 1
+            fi
+            # The Job's own deadline trails this attempt's window, so a runner that
+            # dies mid-attempt still leaves a Job that stops on its own.
+            attempt_end_ts="$budget_end_ts"
+            build_backstop_seconds="$(( remaining + 120 ))"
             job="${job_base}-${build_attempt}"
             logs_file="/tmp/${job}-logs.txt"
             /tmp/kubectl delete job "$job" -n "$KANIKO_NAMESPACE" --ignore-not-found
             render_job "$job"
             apply_job "$job"
 
+            # A runner-sized image takes about 8 minutes on a quiet cluster and close
+            # to 19 when several builds snapshot the filesystem at once. The window used
+            # to be 900s, which failed builds that were going to succeed and, because the
+            # expiry path did not delete the Job, left the pod running to compete with
+            # the next wave for the same disk.
             status=1
-            for _ in $(seq 1 180); do
+            timed_out=0
+            # set -u is in effect and the loop may never run, so an unset value here
+            # would kill the step before it reaps the Job it is waiting on.
+            complete=""
+            failed=""
+            attempt_started_ts="$(date +%s)"
+            while [ "$(date +%s)" -lt "$attempt_end_ts" ]; do
               complete="$(/tmp/kubectl get "job/${job}" -n "$KANIKO_NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || true)"
               failed="$(/tmp/kubectl get "job/${job}" -n "$KANIKO_NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null || true)"
               if [ "$complete" = "True" ]; then
@@ -487,6 +583,11 @@ jobs:
               fi
               sleep 5
             done
+            waited="$(( $(date +%s) - attempt_started_ts ))"
+            if [ "$status" -ne 0 ] && [ "$complete" != "True" ] && [ "$failed" != "True" ]; then
+              timed_out=1
+              echo "kaniko: build did not finish within ${waited}s" >&2
+            fi
             /tmp/kubectl logs "job/${job}" -n "$KANIKO_NAMESPACE" --tail=-1 \
               2>&1 | tee "$logs_file" || true
             if [ "$status" -eq 0 ]; then
@@ -495,6 +596,13 @@ jobs:
             fi
 
             /tmp/kubectl describe "job/${job}" -n "$KANIKO_NAMESPACE" || true
+            if [ "$timed_out" -eq 1 ]; then
+              # Leaving it running would keep it snapshotting against the same disk the
+              # next build needs, which is how one slow wave turned into several.
+              echo "kaniko: deleting the Job we stopped waiting for" >&2
+              /tmp/kubectl delete job "$job" -n "$KANIKO_NAMESPACE" --ignore-not-found --wait=false
+              exit 1
+            fi
             if ! is_transient_build_failure "$logs_file"; then
               echo "kaniko: non-transient build failure; not retrying" >&2
               exit 1
